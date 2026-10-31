@@ -18,7 +18,7 @@ function isNewerVersion(latest, current) {
 
 // ===== 更新检查 =====
 // 网络不可达（国内网络常见）或仓库尚无 Release 时静默处理，不输出错误日志
-const UPDATE_API = 'https://api.github.com/repos/tsrdzy/ipixel/releases/latest'
+const UPDATE_API = 'https://api.github.com/repos/tsrdzy/tsrbox/releases/latest'
 const UPDATE_CACHE_MS = 10 * 60 * 1000
 let updateCache = null
 
@@ -47,8 +47,8 @@ export const useSettingsStore = defineStore('settings', () => {
   const showThemeInTitlebar = ref(true)
   const showLanguageInTitlebar = ref(true)
   const deviceInfo = ref(null)
-  // 默认不在启动时联网检查更新（网络受限环境下会产生无谓请求），用户可在设置中开启
-  const checkForUpdates = ref(false)
+  // 默认启动时检查更新，用户可在设置中关闭
+  const checkForUpdates = ref(true)
   const skin = ref('#409EFF')
   const shortcuts = ref({
     selectAll: { key: 'a', ctrl: true },

@@ -23,18 +23,18 @@ jobs:
       # 私有插件（登录等敏感功能）：从仓库 Secret PLUGINS_B64 还原，
       # secret 不存在时自动构建纯核心版本。生成方式见 PLUGIN_DEV.md。
       - name: Restore private plugins
-        shell: bash
+        shell: pwsh
         env:
           PLUGINS_B64: ${{ secrets.PLUGINS_B64 }}
         run: |
-          if [ -n "$PLUGINS_B64" ]; then
-            mkdir -p src/plugins
-            echo "$PLUGINS_B64" | base64 -d > /tmp/plugins.zip
-            tar -xf /tmp/plugins.zip -C src/plugins
-            echo "plugins restored: $(ls src/plugins)"
-          else
-            echo "no PLUGINS_B64 secret, building core-only"
-          fi
+          if ($env:PLUGINS_B64) {
+            New-Item -ItemType Directory -Force -Path src/plugins | Out-Null
+            [IO.File]::WriteAllBytes("$env:RUNNER_TEMP/plugins.zip", [Convert]::FromBase64String($env:PLUGINS_B64.Trim()))
+            Expand-Archive "$env:RUNNER_TEMP/plugins.zip" -DestinationPath src/plugins -Force
+            Write-Host "plugins restored: $((Get-ChildItem src/plugins -Directory).Name -join ', ')"
+          } else {
+            Write-Host "no PLUGINS_B64 secret, building core-only"
+          }
 
       - uses: actions/setup-node@v4
         with:
