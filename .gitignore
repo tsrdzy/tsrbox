@@ -21,3 +21,6 @@ Thumbs.db
 *.local
 .env
 .env.*
+
+# Trae 内部产物
+.trae-html-share-packages/
