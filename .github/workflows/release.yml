@@ -65,3 +65,16 @@ jobs:
           releaseBody: 'See the assets below to download and install this version.'
           releaseDraft: true
           prerelease: false
+
+      # 绿色版：Windows 单文件 zip，追加到同一 Release
+      - name: Create portable zip (windows only)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path src-tauri/target/release/tsrbox.exe -DestinationPath "tsrbox_${{ github.ref_name }}_x64-portable.zip" -Force
+
+      - name: Upload portable zip (windows only)
+        if: matrix.platform == 'windows-latest'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "tsrbox_${{ github.ref_name }}_x64-portable.zip"
