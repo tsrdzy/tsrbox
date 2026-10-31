@@ -1,0 +1,32 @@
+{
+  "name": "tsrbox",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "A Blockbench (.bbmodel) model resource manager built with Tauri",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "test": "cd src-tauri && cargo test --lib"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.11.1",
+    "@tauri-apps/plugin-dialog": "2.7.3",
+    "@tauri-apps/plugin-opener": "2.5.5",
+    "element-plus": "^2.14.2",
+    "pinia": "^3.0.4",
+    "three": "^0.185.1",
+    "vue": "^3.5.25",
+    "vue-i18n": "^9.14.4",
+    "vue-router": "^5.1.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@vitejs/plugin-vue": "^6.0.2",
+    "vite": "^7.2.6"
+  }
+}

@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>tsrbox - BBMODEL 模型库</title>
+    <script>
+      // 内联执行，避免生产构建后外部脚本丢失与首屏主题闪烁
+      ;(function () {
+        try {
+          var saved = localStorage.getItem('imodel-theme')
+          if (saved !== 'light') document.documentElement.classList.add('dark')
+        } catch (e) {
+          document.documentElement.classList.add('dark')
+        }
+      })()
+    </script>
+  </head>
+
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

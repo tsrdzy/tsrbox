@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+          - platform: macos-latest
+          - platform: ubuntu-22.04
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # 私有插件（登录等敏感功能）：从仓库 Secret PLUGINS_B64 还原，
+      # secret 不存在时自动构建纯核心版本。生成方式见 PLUGIN_DEV.md。
+      - name: Restore private plugins
+        shell: bash
+        env:
+          PLUGINS_B64: ${{ secrets.PLUGINS_B64 }}
+        run: |
+          if [ -n "$PLUGINS_B64" ]; then
+            mkdir -p src/plugins
+            echo "$PLUGINS_B64" | base64 -d > /tmp/plugins.zip
+            tar -xf /tmp/plugins.zip -C src/plugins
+            echo "plugins restored: $(ls src/plugins)"
+          else
+            echo "no PLUGINS_B64 secret, building core-only"
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      - name: Install dependencies (ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'tsrbox v__VERSION__'
+          releaseBody: 'See the assets below to download and install this version.'
+          releaseDraft: true
+          prerelease: false

@@ -1,0 +1,23 @@
+# 依赖
+node_modules/
+
+# 前端构建产物
+dist/
+dist-ssr/
+
+# Rust 构建产物
+src-tauri/target/
+src-tauri/gen/
+
+# 插件目录（私有功能，不上传，见 PLUGIN_DEV.md）
+src/plugins/
+
+# 日志与系统文件
+*.log
+.DS_Store
+Thumbs.db
+
+# 本地环境配置
+*.local
+.env
+.env.*
