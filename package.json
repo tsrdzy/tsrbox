@@ -1,7 +1,7 @@
 {
   "name": "tsrbox",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
   "description": "A Blockbench (.bbmodel) model resource manager built with Tauri",
   "scripts": {
