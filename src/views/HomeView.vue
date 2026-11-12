@@ -1,7 +1,13 @@
+<script>
+// 普通 script 块：模块级作用域，跨组件实例存活
+// 用于记住离开首页时的滚动位置，从模型详情返回后恢复（不回到顶部）
+let savedHomeScrollTop = -1
+</script>
+
 <script setup>
-import { ref, computed, shallowRef, reactive, defineAsyncComponent } from 'vue'
+import { ref, computed, shallowRef, reactive, defineAsyncComponent, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElLoading } from 'element-plus'
 
 import { useStore } from '../composables/useStore'
 import { useDragUpload } from '../composables/useDragUpload'
@@ -9,19 +15,20 @@ import { useResourceShortcuts } from '../composables/useResourceShortcuts'
 import { useNativeDrag } from '../composables/useNativeDrag'
 import { askExportFormat } from '../composables/exportFormatDialog'
 import { useBoxSelect } from '../composables/useBoxSelect'
+import { useVirtualGrid } from '../composables/useVirtualGrid'
 import { useUploadStore } from '../stores/upload'
-import { useFolderStore } from '../stores/folders'
+import { useFolderStore, UNFILED_ID } from '../stores/folders'
 import { useTagFilterStore } from '../stores/tagFilter'
+import { useCovers } from '../composables/useCovers'
+import { useCoverRenderer } from '../composables/useCoverRenderer'
 import ModelCard from '../components/ModelCard.vue'
-
-// 异步加载 3D 预览组件，three.js 不进入首屏主包
-const ModelViewer = defineAsyncComponent(() => import('../components/ModelViewer.vue'))
 
 const { state, goUpload, goEdit, closeLibrary, renameLibrary, batchUpload, loadAll, deleteModel, saveSettings } = useStore()
 const { t } = useI18n()
 const uploadStore = useUploadStore()
 const folderStore = useFolderStore()
 const tagFilter = useTagFilterStore()
+const covers = useCovers()
 
 const keyword = ref('')
 const sortBy = ref('uploadTime') // uploadTime | fileSize | name | dimension
@@ -86,15 +93,6 @@ function onSelectAll(val) {
 // 框选相关
 const contentRef = ref(null)
 const selectionBoxRef = ref(null)
-const { isDragging, showSelectionBox, handleMouseDown, consumeBoxSelect } = useBoxSelect({
-  contentRef,
-  selectionBoxRef,
-  cardSelector: '.card',
-  idAttr: 'data-model-id',
-  selectedIds,
-  isMultiSelect,
-  anchorId
-})
 
 /** 资源库名字下拉菜单命令处理 */
 async function handleLibCommand(cmd) {
@@ -141,9 +139,11 @@ const filteredModels = computed(() => {
     list = list.filter((m) => activeTags.some((t) => m.tags && m.tags.includes(t)))
   }
 
-  // 当前文件夹（空字符串 = 全部文件）
+  // 当前文件夹（空字符串 = 全部文件；UNFILED_ID = 未入文件夹）
   const folderId = folderStore.activeFolderId
-  if (folderId) {
+  if (folderId === UNFILED_ID) {
+    list = list.filter((m) => !m.folderId)
+  } else if (folderId) {
     list = list.filter((m) => String(m.folderId || '') === folderId)
   }
 
@@ -218,6 +218,109 @@ const filteredModels = computed(() => {
   return list
 })
 
+// 虚拟滚动：只渲染视口内的行，其余用 translateY 占位
+// 列表上万条时 DOM 节点数仍保持在几十个，滚动不再随数量变卡
+const gridRef = ref(null)
+// 信息区高度按当前显示的字段预估，保证同一屏卡片等高（虚拟滚动依赖统一行高）
+const infoHeight = computed(() => {
+  if (previewSize.value <= 2) {
+    return displaySettings.name ? 32 : 16
+  }
+  if (previewSize.value <= 3) {
+    const hasMeta = displaySettings.dimensions || displaySettings.fileSize
+    return (displaySettings.name ? 21 : 0) + (hasMeta ? 16 : 0) + 18
+  }
+  let h = 24
+  if (displaySettings.name) h += 28
+  if (displaySettings.tags) h += 28
+  if (displaySettings.dimensions || displaySettings.fileSize) h += 18
+  if (displaySettings.uploadTime) h += 20
+  return h + 3
+})
+const vgrid = useVirtualGrid({
+  containerRef: contentRef,
+  gridRef,
+  items: filteredModels,
+  minWidth: gridMinWidth,
+  infoHeight,
+  gap: 16,
+  overscan: 2
+})
+const { cols, coverH, cardH, totalHeight, visibleRows, rectAt, refresh: refreshGrid } = vgrid
+
+// 封面只按「当前视口」调度：视口一变立即丢弃旧视口排队中的请求，
+// 等滚动停下来（50ms 内没有新的视口）再按新视口从上到下读取。
+// 这样快速拖动滚动条瞬间跳到底部时，中间掠过的行不会发起读取
+const COVER_IDLE_DELAY = 50
+let coverTimer = null
+watch(
+  visibleRows,
+  (rows) => {
+    covers.setWanted([])
+    clearTimeout(coverTimer)
+    coverTimer = setTimeout(() => {
+      coverTimer = null
+      const list = []
+      for (const row of rows) for (const m of row.items) list.push(m)
+      covers.setWanted(list)
+    }, COVER_IDLE_DELAY)
+  },
+  { immediate: true, flush: 'post' }
+)
+onBeforeUnmount(() => {
+  clearTimeout(coverTimer)
+  coverTimer = null
+  covers.setWanted([])
+})
+
+// 预览尺寸 / 显示字段 / 列表内容变化后，列数与行高都要重算
+watch([previewSize, infoHeight, () => filteredModels.value.length], () => {
+  refreshGrid()
+})
+
+// 框选沿用几何坐标，未渲染的卡片也能被框选
+const { isDragging, showSelectionBox, handleMouseDown, consumeBoxSelect } = useBoxSelect({
+  contentRef,
+  selectionBoxRef,
+  cardSelector: '.card',
+  idAttr: 'data-model-id',
+  selectedIds,
+  isMultiSelect,
+  anchorId,
+  virtual: {
+    count: () => filteredModels.value.length,
+    idAt: (i) => filteredModels.value[i]?.id,
+    rectAt
+  }
+})
+
+onMounted(() => {
+  // 从模型详情返回时恢复滚动位置（不回到顶部）
+  // 列表异步加载，等筛选结果变化（DOM 更新后）再设置 scrollTop
+  if (savedHomeScrollTop > 0) {
+    const target = savedHomeScrollTop
+    const stopRestore = watch(
+      filteredModels,
+      async () => {
+        await nextTick()
+        await nextTick()
+        const el = contentRef.value
+        if (!el) return
+        el.scrollTop = target
+        // 到达目标（或已到底）则停止，避免干扰用户后续滚动
+        if (Math.abs(el.scrollTop - target) < 2 || el.scrollTop + el.clientHeight >= el.scrollHeight - 2) {
+          stopRestore()
+        }
+      },
+      { immediate: true, flush: 'post' }
+    )
+  }
+})
+
+onBeforeUnmount(() => {
+  savedHomeScrollTop = contentRef.value?.scrollTop ?? 0
+})
+
 /** 排序下拉菜单命令处理 */
 function handleSortCommand(cmd) {
   if (cmd === 'asc' || cmd === 'desc') {
@@ -236,7 +339,9 @@ const selectedModels = computed(() => filteredModels.value.filter((m) => isSelec
 
 const emptyDescription = computed(() => {
   if (!state.models.length) return t('home.noModel')
-  if (folderStore.activeFolderId) {
+  if (folderStore.activeFolderId === UNFILED_ID) {
+    if (!state.models.some((m) => !m.folderId)) return t('folders.emptyFolder')
+  } else if (folderStore.activeFolderId) {
     const hasInFolder = state.models.some(
       (m) => String(m.folderId || '') === folderStore.activeFolderId
     )
@@ -247,6 +352,10 @@ const emptyDescription = computed(() => {
 
 // ===== 多级文件夹导航 =====
 const folderPath = computed(() => folderStore.folderPath(folderStore.activeFolderId))
+/** 上传默认归属文件夹：「未入文件夹」虚拟分类视为无文件夹 */
+const uploadFolderId = computed(() =>
+  folderStore.activeFolderId === UNFILED_ID ? '' : folderStore.activeFolderId || ''
+)
 const childFolders = computed(() => {
   if (!folderStore.activeFolderId) return []
   const counts = {}
@@ -274,12 +383,18 @@ function enterFolder(id) {
 const { onCardMouseDown, shouldSuppressClick } = useNativeDrag({
   type: 'models',
   folderSelector: '[data-folder-drop]',
+  outsideHint: () => t('home.dragOutHint'),
+  getFolderLabel: (key) => {
+    if (key === '__all__') return t('folders.allFiles')
+    if (key === UNFILED_ID) return t('folders.unfiled')
+    return folderStore.folders.find((f) => f.id === key)?.name || ''
+  },
   onFolderHover: (key) => {
     folderStore.dragOverKey = key
   },
   onFolderDrop: (key, ids) => {
     folderStore.dragOverKey = ''
-    moveModelsToFolder(ids, key === '__all__' ? '' : key)
+    moveModelsToFolder(ids, key === '__all__' || key === UNFILED_ID ? '' : key)
   }
 })
 
@@ -417,10 +532,11 @@ function selectInverse() {
 }
 
 async function handleBatchDelete() {
-  if (selectedIds.value.length === 0) return
+  const ids = selectedIds.value.slice()
+  if (ids.length === 0) return
   try {
     await ElMessageBox.confirm(
-      t('home.confirmBatchDelete', { count: selectedIds.value.length }),
+      t('home.confirmBatchDelete', { count: ids.length }),
       t('home.batchDelete'),
       {
         confirmButtonText: t('common.confirm'),
@@ -432,16 +548,33 @@ async function handleBatchDelete() {
   } catch {
     return
   }
-  for (const id of selectedIds.value) {
+
+  // 上千个模型一次 IPC 批量软删除（Rust 端单事务），并显示进度遮罩
+  const mask = ElLoading.service({
+    lock: true,
+    text: t('home.deleting', { count: ids.length }),
+    background: 'rgba(0, 0, 0, 0.35)'
+  })
+  try {
+    await window.api.models.deleteMany(ids)
+    // 本地移除即可，避免删除后再整表拉取上千条模型
+    const removed = new Set(ids.map(String))
+    state.models = state.models.filter((m) => !removed.has(String(m.id)))
+    for (const id of ids) covers.dropCover(id)
+    clearSelection()
     try {
-      await deleteModel(String(id))
+      state.tags = await window.api.tags.list()
     } catch (e) {
-      console.error(t('home.deletionFailed') + ':', id, e)
+      // 标签池刷新失败不影响删除结果
     }
+    await folderStore.loadFolders()
+    ElMessage.success(t('home.deletionSuccess'))
+  } catch (e) {
+    console.error(t('home.deletionFailed') + ':', e)
+    ElMessage.error(t('home.deletionFailed'))
+  } finally {
+    mask.close()
   }
-  await loadAll()
-  clearSelection()
-  ElMessage.success(t('home.deletionSuccess'))
 }
 
 async function handleBatchAddTag() {
@@ -490,92 +623,10 @@ function onContentMouseDown(e) {
   handleMouseDown(e)
 }
 
-// ===== 批量上传（后台上传任务，不阻塞界面） =====
-// 隐藏 ModelViewer 用于生成封面
-const batchViewerVisible = ref(false)
-const batchRenderKey = ref(0)
-const currentBatchBuffer = shallowRef(null)
-const currentBatchType = ref('')
-const currentBatchAux = ref([])
-const currentBatchViewParams = ref(null)
-const batchViewerRef = ref(null)
-
-let pendingResolve = null
-let pendingReject = null
-let renderTimeout = null
-
-function base64ToUint8Array(base64) {
-  const binary = atob(base64)
-  const len = binary.length
-  const bytes = new Uint8Array(len)
-  for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i)
-  return bytes
-}
-
-function onBatchModelLoaded(payload) {
-  if (!pendingResolve) return
-  // 等 2 帧确保渲染完成
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      let cover = null
-      try {
-        cover = batchViewerRef.value?.captureThumbnail() || null
-      } catch (e) {
-        console.warn('封面截图失败:', e)
-      }
-      const result = {
-        dimensions: payload.dimensions || { x: 0, y: 0, z: 0 },
-        animationCount: payload.animationCount || 0,
-        cover
-      }
-      const resolve = pendingResolve
-      pendingResolve = null
-      pendingReject = null
-      if (renderTimeout) {
-        clearTimeout(renderTimeout)
-        renderTimeout = null
-      }
-      resolve(result)
-    })
-  })
-}
-
-function onBatchModelError(err) {
-  console.warn('[BatchUpload] 模型加载失败:', err)
-  if (!pendingReject) return
-  const reject = pendingReject
-  pendingResolve = null
-  pendingReject = null
-  if (renderTimeout) {
-    clearTimeout(renderTimeout)
-    renderTimeout = null
-  }
-  reject(err)
-}
-
-/** 用隐藏的 ModelViewer 加载模型生成封面 */
-function renderModelForCover(base64, fileType, auxFiles = [], viewParams = null) {
-  return new Promise((resolve, reject) => {
-    pendingResolve = resolve
-    pendingReject = reject
-    const buffer = base64ToUint8Array(base64)
-    // 通过 key 变化强制重新挂载 ModelViewer
-    batchRenderKey.value++
-    currentBatchBuffer.value = buffer
-    currentBatchType.value = fileType
-    currentBatchAux.value = auxFiles || []
-    currentBatchViewParams.value = viewParams || null
-    batchViewerVisible.value = true
-    // 超时保护（30s）
-    renderTimeout = setTimeout(() => {
-      if (pendingReject) {
-        pendingReject(new Error('模型渲染超时'))
-        pendingResolve = null
-        pendingReject = null
-      }
-    }, 30000)
-  })
-}
+// 封面渲染统一走全局渲染器：常驻 App.vue，切换页面不中断，且复用同一 WebGL 上下文
+const coverRenderer = useCoverRenderer()
+const renderModelForCover = coverRenderer.renderModelForCover
+const coverRegen = coverRenderer.regen
 
 // ===== 右键菜单 =====
 const cardMenu = ref(null)
@@ -651,21 +702,62 @@ async function refreshCoverForModel(target) {
     )
     if (!rendered.cover) throw new Error(t('home.refreshCoverFailed'))
     await window.api.models.saveImage(String(target.id), 'cover', rendered.cover)
-    target.coverBase64 = rendered.cover
+    covers.setCover(target.id, rendered.cover)
     target.cover = true
   } finally {
-    batchViewerVisible.value = false
-    currentBatchBuffer.value = null
-    currentBatchAux.value = []
-    currentBatchViewParams.value = null
     refreshingCoverId.value = null
   }
+}
+
+/** 一键重建全部封面：后台运行（切换页面不中断），进度显示在标题栏 */
+async function handleRegenCovers() {
+  // 运行中再次点击 → 取消（已生成的封面会保留并刷新到列表）
+  if (coverRegen.running) {
+    try {
+      await ElMessageBox.confirm(
+        t('home.regenCoversCancelConfirm'),
+        t('home.regenCoversCancel'),
+        {
+          confirmButtonText: t('common.ok'),
+          cancelButtonText: t('common.cancel'),
+          type: 'warning'
+        }
+      )
+    } catch {
+      return
+    }
+    coverRenderer.cancelRegen()
+    return
+  }
+  if (!state.models.length) return
+  try {
+    await ElMessageBox.confirm(
+      t('home.regenCoversConfirm', { count: state.models.length }),
+      t('home.regenCovers'),
+      {
+        confirmButtonText: t('common.ok'),
+        cancelButtonText: t('common.cancel'),
+        type: 'warning'
+      }
+    )
+  } catch {
+    return
+  }
+  const res = await coverRenderer.regenerateAll(state.models)
+  if (!res) return
+  // 取消时也要刷新，让已生成的封面立即显示
+  await loadAll()
+  if (res.cancelled) {
+    ElMessage.info(t('home.regenCoversCancelled', { count: res.success }))
+    return
+  }
+  ElMessage.success(t('home.regenCoversDone', { success: res.success, failed: res.failed }))
 }
 
 async function handleMenuRefreshCovers() {
   const list = menuTargets.value.slice()
   closeCardMenu()
-  if (!list.length || pendingResolve || refreshingCoverId.value) return
+  if (!list.length || refreshingCoverId.value) return
 
   const taskId = uploadStore.begin({
     title: t('home.refreshCover'),
@@ -819,7 +911,7 @@ async function handleBatchUpload() {
             dup.pendingFile
           )
           overwritten.folderId =
-            dup.existingModel?.folderId || folderStore.activeFolderId || ''
+            dup.existingModel?.folderId || uploadFolderId.value
           processItems.push(overwritten)
         } catch (e) {
           console.error('[BatchUpload] 覆盖失败:', dup.defaultName, e)
@@ -856,7 +948,9 @@ async function handleBatchUpload() {
       let cover = null
 
       try {
-        const rendered = await renderModelForCover(item.dataBase64, item.fileType)
+        // 按需读取模型数据，避免一次性持有全部文件的 base64 导致 WebView 内存溢出
+        const dataBase64 = await window.api.models.readFileData(String(item.id), String(item.fileName))
+        const rendered = await renderModelForCover(dataBase64, item.fileType)
         dimensions = rendered.dimensions
         animCount = rendered.animationCount || 0
         cover = rendered.cover
@@ -864,15 +958,12 @@ async function handleBatchUpload() {
         console.warn('[BatchUpload] 渲染失败，跳过封面:', item.defaultName, e)
       }
 
-      // 关闭隐藏 viewer 节省资源（下一个模型会重新挂载）
-      batchViewerVisible.value = false
-      currentBatchBuffer.value = null
-
       try {
         // 保存封面
         let coverField = null
         if (cover) {
           await window.api.models.saveImage(String(item.id), 'cover', cover)
+          covers.setCover(item.id, cover)
           coverField = 'cover.png'
         }
 
@@ -895,7 +986,7 @@ async function handleBatchUpload() {
           cover: coverField,
           viewParams: null,
           tags: [],
-          folderId: item.folderId || folderStore.activeFolderId || ''
+          folderId: item.folderId || uploadFolderId.value
         }
         await window.api.models.save(meta)
         results.push({ success: true, name: item.defaultName, id: item.id, hasCover: !!cover })
@@ -904,8 +995,6 @@ async function handleBatchUpload() {
         results.push({ success: false, name: item.defaultName, error: e.message || '提交失败' })
       }
     }
-
-    batchViewerVisible.value = false
 
     const succ = results.filter((r) => r.success).length
     const failed = results.length - succ
@@ -928,7 +1017,6 @@ async function handleBatchUpload() {
   } catch (e) {
     uploadStore.finish(taskId, { success: 0, failed: 0, error: true, message: e.message || '批量上传失败' })
     ElMessage.error(e.message || '批量上传失败')
-    batchViewerVisible.value = false
   }
 }
 
@@ -994,7 +1082,7 @@ async function handleDragUpload(filePaths) {
         try {
           const overwritten = await window.api.models.overwrite(dup.existingModel, dup.pendingFile)
           overwritten.folderId =
-            dup.existingModel?.folderId || folderStore.activeFolderId || ''
+            dup.existingModel?.folderId || uploadFolderId.value
           processItems.push(overwritten)
         } catch (e) {
           results.push({ name: dup.fileName, success: false, message: e.message })
@@ -1017,7 +1105,9 @@ async function handleDragUpload(filePaths) {
       let animCount = 0
 
       try {
-        const rendered = await renderModelForCover(item.dataBase64, item.fileType)
+        // 按需读取模型数据，避免一次性持有全部文件的 base64 导致 WebView 内存溢出
+        const dataBase64 = await window.api.models.readFileData(String(item.id), String(item.fileName))
+        const rendered = await renderModelForCover(dataBase64, item.fileType)
         cover = rendered.cover
         dims = rendered.dimensions
         animCount = rendered.animationCount
@@ -1025,15 +1115,12 @@ async function handleDragUpload(filePaths) {
         console.warn('[DragUpload] 封面生成失败:', item.fileName, e)
       }
 
-      // 关闭隐藏 viewer 节省资源
-      batchViewerVisible.value = false
-      currentBatchBuffer.value = null
-
       try {
         // 保存封面
         let coverField = null
         if (cover) {
           await window.api.models.saveImage(String(item.id), 'cover', cover)
+          covers.setCover(item.id, cover)
           coverField = 'cover.png'
         }
 
@@ -1056,7 +1143,7 @@ async function handleDragUpload(filePaths) {
           cover: coverField,
           viewParams: null,
           tags: [],
-          folderId: item.folderId || folderStore.activeFolderId || ''
+          folderId: item.folderId || uploadFolderId.value
         }
         await window.api.models.save(meta)
         results.push({ name: item.defaultName || item.fileName, success: true, hasCover: !!cover })
@@ -1077,7 +1164,6 @@ async function handleDragUpload(filePaths) {
     if (unsubscribe) unsubscribe()
     uploadStore.finish(taskId, { success: 0, failed: 0, error: true, message: e.message || '拖拽上传失败' })
     ElMessage.error(e.message || '拖拽上传失败')
-    batchViewerVisible.value = false
   }
 }
 
@@ -1109,7 +1195,11 @@ useResourceShortcuts({
   onBatchAddTag: handleBatchAddTag,
   onExport: () => exportModels(selectedModels.value),
   onRefresh: loadAll,
-  onOpenDetail: (model) => goEdit(model)
+  onOpenDetail: (model) => goEdit(model),
+  virtual: {
+    cols: () => cols.value,
+    scrollToIndex: (i) => vgrid.scrollToIndex(i)
+  }
 })
 </script>
 
@@ -1146,6 +1236,12 @@ useResourceShortcuts({
         </el-input>
       </div>
       <div class="topbar-right">
+        <el-button
+          :title="coverRegen.running ? t('home.regenCoversCancel') : t('home.regenCovers')"
+          @click="handleRegenCovers"
+        >
+          <i class="iconfont icon-repeat"></i>
+        </el-button>
         <el-popover trigger="click" placement="bottom" :width="240">
           <template #reference>
             <el-button type="primary" :title="t('common.previewSize')">
@@ -1316,6 +1412,10 @@ useResourceShortcuts({
               {{ crumb.name }}
             </el-button>
           </template>
+          <template v-if="folderStore.activeFolderId === UNFILED_ID">
+            <i class="iconfont icon-chevron-right crumb-sep"></i>
+            <el-button text size="small" class="crumb-current">{{ t('folders.unfiled') }}</el-button>
+          </template>
         </div>
         <el-button v-if="childFolders.length" text size="small" @click="toggleChildFolders">
           <i class="iconfont icon-chevron-down child-toggle" :class="{ open: showChildFolders }"></i>
@@ -1339,24 +1439,43 @@ useResourceShortcuts({
         </div>
       </div>
 
-      <div v-if="filteredModels.length" class="grid">
-        <ModelCard
-          v-for="m in filteredModels"
-          :key="m.id"
-          :model="m"
-          :selected="isSelected(m.id)"
-          :is-dragging="isDragging"
-          :display="displaySettings"
-          :density="previewSize <= 2 ? 'tiny' : previewSize <= 3 ? 'compact' : 'full'"
-          :data-model-id="m.id"
-          @mousedown="onCardMouseDown($event, m, selectedModels)"
-          @contextmenu="handleCardContextMenu"
-          @select="handleSelect"
-          @dblclick="handleDblClick"
-        />
+      <div
+        ref="gridRef"
+        class="grid vgrid"
+        :style="{
+          height: totalHeight + 'px',
+          '--card-h': cardH + 'px',
+          '--card-cover-h': coverH + 'px'
+        }"
+      >
+        <div
+          v-for="row in visibleRows"
+          :key="row.key"
+          class="vgrid-row"
+          :style="{ transform: `translateY(${row.top}px)`, gridTemplateColumns: `repeat(${cols}, 1fr)` }"
+        >
+          <ModelCard
+            v-for="m in row.items"
+            :key="m.id"
+            :model="m"
+            :selected="isSelected(m.id)"
+            :is-dragging="isDragging"
+            :display="displaySettings"
+            :density="previewSize <= 2 ? 'tiny' : previewSize <= 3 ? 'compact' : 'full'"
+            :data-model-id="m.id"
+            @mousedown="onCardMouseDown($event, m, selectedModels)"
+            @contextmenu="handleCardContextMenu"
+            @select="handleSelect"
+            @dblclick="handleDblClick"
+          />
+        </div>
       </div>
 
-      <el-empty v-else :description="emptyDescription" />
+      <el-empty v-if="!filteredModels.length" :description="emptyDescription">
+        <template #image>
+          <i class="iconfont icon-moxing empty-state-icon"></i>
+        </template>
+      </el-empty>
 
       <!-- 框选框 -->
       <div
@@ -1435,19 +1554,7 @@ useResourceShortcuts({
         <p class="drag-overlay-formats">BBMODEL / VOX</p>
       </div>
     </div>
-    <!-- 隐藏的 ModelViewer 用于批量上传时生成封面 -->
-    <div class="hidden-viewer" v-if="batchViewerVisible">
-      <ModelViewer
-        :key="batchRenderKey"
-        ref="batchViewerRef"
-        :buffer="currentBatchBuffer"
-        :file-type="currentBatchType"
-        :aux-files="currentBatchAux"
-        :view-params="currentBatchViewParams"
-        @loaded="onBatchModelLoaded"
-        @error="onBatchModelError"
-      />
-    </div>
+    <!-- 封面渲染由 App.vue 的全局隐藏渲染器承担 -->
   </div>
 </template>
 
@@ -1687,7 +1794,21 @@ useResourceShortcuts({
   grid-template-columns: repeat(auto-fill, minmax(v-bind(gridMinWidth + 'px'), 1fr));
   gap: 16px;
 }
-
+/* 虚拟滚动：容器只管高度，实际渲染的行绝对定位 */
+.grid.vgrid {
+  display: block;
+  position: relative;
+}
+.vgrid-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: grid;
+  gap: 16px;
+  align-items: start;
+  will-change: transform;
+}
 /* 批量上传弹窗 */
 .batch-body {
   padding: 4px 0;
@@ -1902,5 +2023,33 @@ useResourceShortcuts({
 body.tsrbox-dragging,
 body.tsrbox-dragging * {
   cursor: grabbing !important;
+}
+
+/* 拖动跟随提示：文件名 + 数量 + 目标文件夹 */
+.tsrbox-drag-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 9999;
+  pointer-events: none;
+  max-width: 280px;
+  padding: 6px 10px;
+  background: var(--bg-soft);
+  border: 1px solid var(--brand);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  will-change: transform;
+}
+.tsrbox-drag-ghost.is-target {
+  border-color: var(--el-color-success, #67c23a);
+}
+.tsrbox-drag-ghost.is-out {
+  border-style: dashed;
+  opacity: 0.85;
 }
 </style>

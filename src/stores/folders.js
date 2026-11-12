@@ -15,6 +15,9 @@ export const FOLDER_COLORS = [
 
 const EXPANDED_KEY = 'tsrbox-folder-expanded'
 
+/** 虚拟分类「未入文件夹」的 activeFolderId 取值 */
+export const UNFILED_ID = '__unfiled__'
+
 function loadExpanded() {
   try {
     const raw = localStorage.getItem(EXPANDED_KEY)
@@ -158,6 +161,7 @@ export const useFolderStore = defineStore('folders', () => {
       folders.value = Array.isArray(list) ? list : []
       if (
         activeFolderId.value &&
+        activeFolderId.value !== UNFILED_ID &&
         !folders.value.some((folder) => folder.id === activeFolderId.value)
       ) {
         activeFolderId.value = ''
@@ -208,7 +212,7 @@ export const useFolderStore = defineStore('folders', () => {
 
   function setActiveFolder(id) {
     activeFolderId.value = id || ''
-    if (id) expandTo(id)
+    if (id && id !== UNFILED_ID) expandTo(id)
   }
 
   return {

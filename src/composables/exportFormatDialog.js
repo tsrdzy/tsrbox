@@ -1,7 +1,7 @@
 import { reactive } from 'vue'
 
 /** 导出格式列表（与 Rust convert::Format 对应） */
-export const EXPORT_FORMATS = ['original', 'bbmodel', 'bedrock', 'java', 'generic']
+export const EXPORT_FORMATS = ['original', 'bbmodel', 'bedrock', 'java', 'generic', 'gltf']
 
 /**
  * 全局导出格式选择弹窗状态：

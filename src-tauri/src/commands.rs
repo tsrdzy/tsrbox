@@ -644,24 +644,9 @@ pub fn models_move_folder(
 
 #[tauri::command]
 pub fn models_list(state: State<'_, AppState>) -> Result<Value, String> {
-    let root = get_root(&state)?;
-    let mut models = with_db(&state, |conn| store::list_models(conn))?;
-    for model in &mut models {
-        let id = model
-            .get("id")
-            .and_then(|value| value.as_str())
-            .unwrap_or("")
-            .to_string();
-        let has_cover = model
-            .get("cover")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false);
-        if has_cover {
-            if let Some(cover) = store::cover_data_url(&root, &id) {
-                model["coverBase64"] = json!(cover);
-            }
-        }
-    }
+    // 列表不内嵌封面：上千模型时单次响应过大且阻塞渲染，
+    // 封面由前端按可见卡片懒加载（models_read_image）。
+    let models = with_db(&state, |conn| store::list_models(conn))?;
     Ok(json!(models))
 }
 
@@ -862,7 +847,8 @@ fn batch_upload_impl(app: &AppHandle, paths: Vec<String>) -> Result<Value, Strin
             }
 
             seen_hashes.insert(key.clone());
-            store::create_model_from_path(&root, source, &key)
+            // 批量结果不内嵌文件数据，封面数据由前端按需读取
+            store::create_model_from_path(&root, source, &key, false)
         })();
 
         match result {
@@ -930,6 +916,23 @@ pub async fn models_batch_upload_by_paths(
     tauri::async_runtime::spawn_blocking(move || batch_upload_impl(&handle, paths))
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// 按需读取已入库（但未保存元数据）的模型文件内容，用于批量上传后渲染封面
+#[tauri::command]
+pub async fn models_read_file_data(
+    app: AppHandle,
+    id: String,
+    file_name: String,
+) -> Result<String, String> {
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = handle.state::<AppState>();
+        let root = get_root(&state)?;
+        store::read_model_file_data(&root, &id, &file_name)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1145,25 +1148,27 @@ pub fn models_delete(state: State<'_, AppState>, id: String) -> Result<Value, St
 }
 
 #[tauri::command]
+pub async fn models_delete_batch(
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+) -> Result<Value, String> {
+    // 异步命令：避免上千条更新阻塞主线程，前端可以正常显示进度
+    let deleted = with_db(&state, |conn| store::soft_delete_models(conn, &ids))?;
+    log_operation(
+        &state,
+        "delete",
+        "models",
+        json!({ "count": deleted, "batch": true, "recycle": true }),
+        "success",
+        "",
+    );
+    Ok(json!({ "deleted": deleted }))
+}
+
+#[tauri::command]
 pub fn models_list_deleted(state: State<'_, AppState>) -> Result<Value, String> {
-    let root = get_root(&state)?;
-    let mut models = with_db(&state, |conn| store::list_deleted_models(conn))?;
-    for model in &mut models {
-        let id = model
-            .get("id")
-            .and_then(|value| value.as_str())
-            .unwrap_or("")
-            .to_string();
-        let has_cover = model
-            .get("cover")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false);
-        if has_cover {
-            if let Some(cover) = store::cover_data_url(&root, &id) {
-                model["coverBase64"] = json!(cover);
-            }
-        }
-    }
+    // 同 models_list：封面由前端懒加载
+    let models = with_db(&state, |conn| store::list_deleted_models(conn))?;
     Ok(json!({
         "models": models,
         "retentionDays": store::RECYCLE_RETENTION_DAYS
@@ -1202,18 +1207,27 @@ pub fn models_delete_forever(state: State<'_, AppState>, id: String) -> Result<V
 }
 
 #[tauri::command]
-pub fn models_empty_recycle(state: State<'_, AppState>) -> Result<Value, String> {
-    let root = get_root(&state)?;
-    let removed = with_db(&state, |conn| store::empty_recycle(&root, conn))?;
-    log_operation(
-        &state,
-        "delete",
-        "models",
-        json!({ "recycle": "empty", "count": removed }),
-        "success",
-        "",
-    );
-    Ok(json!({ "removed": removed }))
+pub async fn models_empty_recycle(app: AppHandle) -> Result<Value, String> {
+    // 清空回收站要删掉大量模型目录（上千个文件夹），放到阻塞线程池执行，避免窗口卡死
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let root = get_root(&state)?;
+        // 数据库删除在锁内一次性完成，文件删除放到锁外并行执行
+        let ids = with_db(&state, |conn| store::empty_recycle(conn))?;
+        let count = ids.len();
+        store::remove_model_dirs(&root, &ids);
+        log_operation(
+            &state,
+            "delete",
+            "models",
+            json!({ "recycle": "empty", "count": count }),
+            "success",
+            "",
+        );
+        Ok(json!({ "removed": count }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn model_display_name(model: &Value) -> String {
@@ -1304,6 +1318,7 @@ fn format_label(format: convert::Format) -> &'static str {
         convert::Format::Bedrock => "基岩版 JSON",
         convert::Format::Java => "Java 版 JSON",
         convert::Format::Generic => "通用 JSON",
+        convert::Format::Gltf => "glTF 2.0",
     }
 }
 

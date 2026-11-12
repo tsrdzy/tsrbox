@@ -7,7 +7,7 @@ import { useStore } from '../composables/useStore'
 import { useDragUpload } from '../composables/useDragUpload'
 import { askExportFormat } from '../composables/exportFormatDialog'
 import { useUploadStore } from '../stores/upload'
-import { useFolderStore } from '../stores/folders'
+import { useFolderStore, UNFILED_ID } from '../stores/folders'
 import TagInput from '../components/TagInput.vue'
 import { base64ToBytes, base64ToText } from '../lib/geomCommon'
 import { detectJsonKind } from '../lib/jsonModel'
@@ -487,7 +487,8 @@ function buildMeta(row, id, files, coverName, existing, folderId) {
     tags: (row.tags || []).map((tag) => String(tag))
   }
   if (!existing) {
-    meta.folderId = folderId !== undefined ? folderId : folderStore.activeFolderId || ''
+    const activeId = folderStore.activeFolderId || ''
+    meta.folderId = folderId !== undefined ? folderId : activeId === UNFILED_ID ? '' : activeId
   }
   return meta
 }
@@ -932,7 +933,7 @@ onBeforeUnmount(() => {
     <footer class="upload-footer">
       <span class="footer-tip">{{ t('upload.onlyOnSubmit') }}</span>
       <span class="footer-count">
-        {{ t('folders.uploadTo', { name: folderStore.activeFolder?.name || t('folders.allFiles') }) }}
+        {{ t('folders.uploadTo', { name: folderStore.activeFolderId === UNFILED_ID ? t('folders.unfiled') : folderStore.activeFolder?.name || t('folders.allFiles') }) }}
       </span>
       <span class="footer-count">{{ t('upload.stagedCount', { count: rows.length }) }}</span>
       <el-button @click="handleBack">{{ t('common.cancel') }}</el-button>

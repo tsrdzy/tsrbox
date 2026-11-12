@@ -28,7 +28,10 @@ export function useResourceShortcuts({
   onExport,
   onRefresh,
   onOpenDetail,
-  onAddTag
+  onAddTag,
+  // 虚拟滚动几何信息：{ cols: () => number, scrollToIndex: (i) => void }
+  // 提供后方向键导航不再依赖 DOM 中是否存在该卡片
+  virtual
 }) {
   const settingsStore = useSettingsStore()
 
@@ -50,6 +53,10 @@ export function useResourceShortcuts({
   }
 
   function calculateGridCols() {
+    if (virtual) {
+      gridCols.value = Math.max(1, virtual.cols())
+      return
+    }
     if (!contentRef.value) return
     const cards = contentRef.value.querySelectorAll(CARD_SELECTOR)
     if (cards.length < 1) {
@@ -184,6 +191,10 @@ export function useResourceShortcuts({
   }
 
   function scrollToItem(idx) {
+    if (virtual) {
+      virtual.scrollToIndex(idx)
+      return
+    }
     if (!contentRef.value) return
     const cards = contentRef.value.querySelectorAll(CARD_SELECTOR)
     const card = cards[idx]

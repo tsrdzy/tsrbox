@@ -182,6 +182,7 @@ export const api = {
     },
     onBatchUploadProgress,
     loadFile: (model) => call('models_load_file', { model }),
+    readFileData: (id, fileName) => call('models_read_file_data', { id, fileName }),
     addAuxFile: (id, path, role) => call('models_add_aux_file', { id, path, role }),
     removeAuxFile: (id, name) => call('models_remove_aux_file', { id, name }),
     saveImage: (id, type, base64) => call('models_save_image', { id, kind: type, base64 }),
@@ -190,6 +191,7 @@ export const api = {
     save: (meta) => call('models_save', { meta }),
     update: (id, patch) => call('models_update', { id, patch }),
     delete: (id) => call('models_delete', { id }),
+    deleteMany: (ids) => call('models_delete_batch', { ids: (ids || []).map(String) }),
     export: async (model, format = 'original') => {
       const targetRoot = await pickDirectory()
       if (!targetRoot) return null

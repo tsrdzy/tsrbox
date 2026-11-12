@@ -19,8 +19,10 @@ import { ref } from 'vue'
  * @param {Ref<Array>}  opts.selectedIds
  * @param {Ref<boolean>} opts.isMultiSelect
  * @param {Ref<string|null>} opts.anchorId
+ * @param {Object} [opts.virtual] 虚拟滚动几何信息：{ count: () => number, idAt: (i) => string, rectAt: (i) => rect }
+ *        提供后框选按几何位置计算，未渲染的卡片同样可被框选。
  */
-export function useBoxSelect({ contentRef, selectionBoxRef, cardSelector, idAttr, selectedIds, isMultiSelect, anchorId }) {
+export function useBoxSelect({ contentRef, selectionBoxRef, cardSelector, idAttr, selectedIds, isMultiSelect, anchorId, virtual }) {
   const isDragging = ref(false)
   const showSelectionBox = ref(false)
   const dragStartGlobal = ref({ x: 0, y: 0 })
@@ -38,6 +40,17 @@ export function useBoxSelect({ contentRef, selectionBoxRef, cardSelector, idAttr
   let cachedRects = []
 
   function cacheCardRects() {
+    // 虚拟滚动模式：直接按几何位置生成全部卡片的矩形，不依赖 DOM
+    if (virtual) {
+      const total = virtual.count()
+      const rects = new Array(total)
+      for (let i = 0; i < total; i++) {
+        const r = virtual.rectAt(i)
+        rects[i] = { id: virtual.idAt(i), left: r.left, top: r.top, right: r.right, bottom: r.bottom }
+      }
+      cachedRects = rects
+      return
+    }
     if (!contentRef.value) {
       cachedRects = []
       return

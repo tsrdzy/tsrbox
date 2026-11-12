@@ -89,6 +89,7 @@ export default {
     title: 'Carpetas',
     create: 'Nueva carpeta',
     allFiles: 'Todos los archivos',
+    unfiled: 'Sin carpeta',
     empty: 'Aún no hay carpetas; haz clic en + para crear una',
     emptyFolder: 'Esta carpeta aún no tiene modelos',
     rename: 'Renombrar carpeta',
@@ -189,14 +190,16 @@ export default {
       bbmodel: "Proyecto BBMODEL",
       bedrock: "JSON de Bedrock",
       java: "JSON de Java",
-      generic: "JSON genérico"
+      generic: "JSON genérico",
+      gltf: "glTF 2.0"
     },
     desc: {
       original: "Conserva los archivos originales sin conversión",
       bbmodel: "Proyecto de Blockbench con texturas y animaciones incrustadas",
       bedrock: "Geometría .geo.json + animación .animation.json + textura; las animaciones se convierten",
       java: "Modelo de bloque de Java (coordenadas 0-16, rotación de un eje); sin animaciones",
-      generic: "Estructura JSON genérica, reimportable en Blockbench, conserva animaciones"
+      generic: "Estructura JSON genérica, reimportable en Blockbench, conserva animaciones",
+      gltf: "Escena glTF 2.0 (.gltf + .bin + texturas), importable en Blender / three.js; las animaciones no se exportan"
     }
   },
   recycle: {
@@ -212,7 +215,8 @@ export default {
     deleted: "Eliminado definitivamente",
     emptyBin: "Vaciar papelera",
     emptyConfirm: "¿Vaciar la papelera? Todos los modelos se eliminarán definitivamente.",
-    emptied: "Papelera vaciada ({count} modelos)"
+    emptied: "Papelera vaciada ({count} modelos)",
+    emptying: "Vaciando la papelera ({count} modelos)…"
   },
   init: {
     defaultLibraryName: "Biblioteca de modelos",
@@ -237,6 +241,13 @@ export default {
     switchLibrary: 'Cambiar biblioteca'
   },
   home: {
+    regenCovers: 'Regenerar portadas',
+    regenCoversConfirm: 'Regenerar las portadas de {count} modelos en segundo plano (con pose idle). Puedes seguir trabajando. ¿Comenzar?',
+    regenCoversDone: 'Portadas regeneradas: {success} correctas, {failed} fallidas',
+    regenCoversProgress: 'Actualizando portadas: {current}/{total}',
+    regenCoversCancel: 'Cancelar actualización de portadas',
+    regenCoversCancelConfirm: '¿Cancelar la actualización de portadas? Las portadas ya generadas se conservarán.',
+    regenCoversCancelled: 'Actualización de portadas cancelada: {success} portadas actualizadas',
     sameFilesTitle: 'Modelos iguales encontrados',
     sameFilesBatch: 'Se encontraron {count} registros con el mismo modelo y texturas. ¿Continuar y sobrescribir?',
     overwriteAll: 'Sobrescribir todo',
@@ -258,6 +269,7 @@ export default {
     noModel: 'Sin modelos aún. Haz clic en "Subir modelo" para agregar el primero',
     noMatch: 'Sin modelos coincidentes',
     coverPlaceholder: 'Sin vista previa',
+    dragOutHint: 'Arrastra fuera de la ventana para exportar',
     animationCount: '{count} animaciones',
     moreTags: '+{count}',
     confirmBatchDelete: "¿Mover los {count} modelos seleccionados a la papelera? Puedes restaurarlos después.",
@@ -266,6 +278,7 @@ export default {
     tagsAdded: '{count} etiquetas añadidas',
     deletionSuccess: 'Eliminación exitosa',
     deletionFailed: 'Eliminación fallida',
+    deleting: 'Moviendo {count} modelos a la papelera…',
     renameModel: 'Renombrar modelo',
     enterName: 'Introduce el nombre del modelo',
     renamed: 'Renombrado',

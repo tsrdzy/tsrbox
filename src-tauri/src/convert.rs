@@ -22,6 +22,7 @@ pub enum Format {
     Bedrock,
     Java,
     Generic,
+    Gltf,
 }
 
 impl Format {
@@ -31,6 +32,7 @@ impl Format {
             "bedrock" | "geo" | "geo.json" => Format::Bedrock,
             "java" => Format::Java,
             "generic" => Format::Generic,
+            "gltf" | "glb" | "gltf2" => Format::Gltf,
             _ => Format::Original,
         }
     }
@@ -46,6 +48,7 @@ impl Format {
             Format::Bedrock => "bedrock",
             Format::Java => "java",
             Format::Generic => "generic",
+            Format::Gltf => "gltf",
         }
     }
 }
@@ -1872,6 +1875,458 @@ fn write_java(doc: &Doc, name: &str) -> Converted {
     Converted { files, warnings }
 }
 
+// ===== glTF 2.0 导出 =====
+
+/// 每个面的（法线, 纹理 u 方向, 纹理 v 方向），顺序与 FACE_KEYS 一致
+const GLTF_FACE_AXES: [([f32; 3], [f32; 3], [f32; 3]); 6] = [
+    ([1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, -1.0, 0.0]),
+    ([-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]),
+    ([0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+    ([0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]),
+    ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, -1.0, 0.0]),
+    ([0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]),
+];
+
+/// Blockbench / Minecraft 的旋转顺序为 Z→Y→X，返回 (x, y, z, w)
+fn quat_from_euler(deg: [f32; 3]) -> [f32; 4] {
+    let half = [
+        deg[0].to_radians() / 2.0,
+        deg[1].to_radians() / 2.0,
+        deg[2].to_radians() / 2.0,
+    ];
+    let (sx, cx) = half[0].sin_cos();
+    let (sy, cy) = half[1].sin_cos();
+    let (sz, cz) = half[2].sin_cos();
+    let qx = [sx, 0.0, 0.0, cx];
+    let qy = [0.0, sy, 0.0, cy];
+    let qz = [0.0, 0.0, sz, cz];
+    let mul = |a: [f32; 4], b: [f32; 4]| -> [f32; 4] {
+        [
+            a[0] * b[3] + a[3] * b[0] + a[1] * b[2] - a[2] * b[1],
+            a[1] * b[3] + a[3] * b[1] + a[2] * b[0] - a[0] * b[2],
+            a[2] * b[3] + a[3] * b[2] + a[0] * b[1] - a[1] * b[0],
+            a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+        ]
+    };
+    mul(mul(qz, qy), qx)
+}
+
+#[derive(Default)]
+struct GltfBuffers {
+    data: Vec<u8>,
+    views: Vec<Value>,
+    accessors: Vec<Value>,
+}
+
+impl GltfBuffers {
+    fn push_view(&mut self, bytes: &[u8], target: Option<u32>) -> usize {
+        let offset = self.data.len();
+        self.data.extend_from_slice(bytes);
+        let mut view = json!({
+            "buffer": 0,
+            "byteOffset": offset,
+            "byteLength": bytes.len()
+        });
+        if let Some(target) = target {
+            view["target"] = json!(target);
+        }
+        self.views.push(view);
+        self.views.len() - 1
+    }
+
+    fn push_vec3(&mut self, values: &[[f32; 3]], with_bounds: bool) -> usize {
+        let mut bytes = Vec::with_capacity(values.len() * 12);
+        for value in values {
+            for comp in value {
+                bytes.extend_from_slice(&comp.to_le_bytes());
+            }
+        }
+        let view = self.push_view(&bytes, Some(34962));
+        let mut accessor = json!({
+            "bufferView": view,
+            "componentType": 5126,
+            "count": values.len(),
+            "type": "VEC3"
+        });
+        if with_bounds {
+            let mut min = [f32::INFINITY; 3];
+            let mut max = [f32::NEG_INFINITY; 3];
+            for value in values {
+                for i in 0..3 {
+                    min[i] = min[i].min(value[i]);
+                    max[i] = max[i].max(value[i]);
+                }
+            }
+            if values.is_empty() {
+                min = [0.0; 3];
+                max = [0.0; 3];
+            }
+            accessor["min"] = json!([min[0], min[1], min[2]]);
+            accessor["max"] = json!([max[0], max[1], max[2]]);
+        }
+        self.accessors.push(accessor);
+        self.accessors.len() - 1
+    }
+
+    fn push_vec2(&mut self, values: &[[f32; 2]]) -> usize {
+        let mut bytes = Vec::with_capacity(values.len() * 8);
+        for value in values {
+            for comp in value {
+                bytes.extend_from_slice(&comp.to_le_bytes());
+            }
+        }
+        let view = self.push_view(&bytes, Some(34962));
+        self.accessors.push(json!({
+            "bufferView": view,
+            "componentType": 5126,
+            "count": values.len(),
+            "type": "VEC2"
+        }));
+        self.accessors.len() - 1
+    }
+
+    fn push_indices(&mut self, values: &[u32]) -> usize {
+        let mut bytes = Vec::with_capacity(values.len() * 4);
+        for value in values {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        let view = self.push_view(&bytes, Some(34963));
+        self.accessors.push(json!({
+            "bufferView": view,
+            "componentType": 5125,
+            "count": values.len(),
+            "type": "SCALAR"
+        }));
+        self.accessors.len() - 1
+    }
+}
+
+/// 生成一个方块的网格，返回 mesh 索引（无有效面时返回 None）
+fn build_gltf_cube_mesh(
+    cube: &Cube,
+    doc: &Doc,
+    buf: &mut GltfBuffers,
+    material_of_tex: &HashMap<usize, usize>,
+    meshes: &mut Vec<Value>,
+) -> Option<usize> {
+    let inflate = cube.inflate;
+    let mut lo = [cube.from[0] - inflate, cube.from[1] - inflate, cube.from[2] - inflate];
+    let mut hi = [cube.to[0] + inflate, cube.to[1] + inflate, cube.to[2] + inflate];
+    for i in 0..3 {
+        if lo[i] > hi[i] {
+            std::mem::swap(&mut lo[i], &mut hi[i]);
+        }
+    }
+    let center = [
+        (lo[0] + hi[0]) / 2.0,
+        (lo[1] + hi[1]) / 2.0,
+        (lo[2] + hi[2]) / 2.0,
+    ];
+    let half = [
+        (hi[0] - lo[0]) / 2.0,
+        (hi[1] - lo[1]) / 2.0,
+        (hi[2] - lo[2]) / 2.0,
+    ];
+    let origin = cube.origin;
+
+    let mut primitives: Vec<Value> = Vec::new();
+    // 按贴图分组
+    let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (index, face) in cube.faces.iter().enumerate() {
+        if let Some(face) = face {
+            if material_of_tex.contains_key(&face.texture) {
+                groups.entry(face.texture).or_default().push(index);
+            }
+        }
+    }
+    if groups.is_empty() {
+        return None;
+    }
+    let mut tex_ids: Vec<usize> = groups.keys().copied().collect();
+    tex_ids.sort_unstable();
+
+    for tex in tex_ids {
+        let faces = &groups[&tex];
+        let texture = doc.textures.get(tex);
+        let tex_w = texture
+            .map(|t| t.width as f32)
+            .filter(|w| *w > 0.0)
+            .unwrap_or_else(|| doc.res[0].max(1.0));
+        let tex_h = texture
+            .map(|t| t.height as f32)
+            .filter(|h| *h > 0.0)
+            .unwrap_or_else(|| doc.res[1].max(1.0));
+
+        let mut positions: Vec<[f32; 3]> = Vec::new();
+        let mut normals: Vec<[f32; 3]> = Vec::new();
+        let mut uvs: Vec<[f32; 2]> = Vec::new();
+        let mut indices: Vec<u32> = Vec::new();
+
+        for &face_index in faces {
+            let face = cube.faces[face_index].unwrap();
+            let (normal, u_dir, v_dir) = GLTF_FACE_AXES[face_index];
+            let axis = |dir: [f32; 3]| -> usize {
+                if dir[0].abs() > 0.5 {
+                    0
+                } else if dir[1].abs() > 0.5 {
+                    1
+                } else {
+                    2
+                }
+            };
+            let u_axis = axis(u_dir);
+            let v_axis = axis(v_dir);
+            let hu = half[u_axis];
+            let hv = half[v_axis];
+
+            let corner = |su: f32, sv: f32| -> [f32; 3] {
+                [
+                    center[0] + su * hu * u_dir[0] + sv * hv * v_dir[0] - origin[0],
+                    center[1] + su * hu * u_dir[1] + sv * hv * v_dir[1] - origin[1],
+                    center[2] + su * hu * u_dir[2] + sv * hv * v_dir[2] - origin[2],
+                ]
+            };
+            let mut quad = [
+                corner(-1.0, -1.0),
+                corner(1.0, -1.0),
+                corner(1.0, 1.0),
+                corner(-1.0, 1.0),
+            ];
+            // 保证面朝向与法线一致
+            let e1 = [
+                quad[1][0] - quad[0][0],
+                quad[1][1] - quad[0][1],
+                quad[1][2] - quad[0][2],
+            ];
+            let e2 = [
+                quad[3][0] - quad[0][0],
+                quad[3][1] - quad[0][1],
+                quad[3][2] - quad[0][2],
+            ];
+            let cross = [
+                e1[1] * e2[2] - e1[2] * e2[1],
+                e1[2] * e2[0] - e1[0] * e2[2],
+                e1[0] * e2[1] - e1[1] * e2[0],
+            ];
+            if cross[0] * normal[0] + cross[1] * normal[1] + cross[2] * normal[2] < 0.0 {
+                quad.reverse();
+            }
+
+            // UV：rect 为像素坐标（左上原点）
+            let mut rect = face.rect;
+            let rot = ((face.rotation.round() as i32) % 360 + 360) % 360;
+            if rot == 90 || rot == 270 {
+                let w = rect[2] - rect[0];
+                let h = rect[3] - rect[1];
+                rect[2] = rect[0] + h;
+                rect[3] = rect[1] + w;
+            }
+            let base_corners = [
+                [rect[0], rect[1]],
+                [rect[2], rect[1]],
+                [rect[2], rect[3]],
+                [rect[0], rect[3]],
+            ];
+            let shift = ((rot / 90) as usize) % 4;
+            let mut uv_corners = [[0.0f32; 2]; 4];
+            for i in 0..4 {
+                uv_corners[i] = base_corners[(i + shift) % 4];
+            }
+            // 法线反向时顶点顺序被翻转，UV 需同步翻转
+            if cross[0] * normal[0] + cross[1] * normal[1] + cross[2] * normal[2] < 0.0 {
+                uv_corners.reverse();
+            }
+
+            let start = positions.len() as u32;
+            for i in 0..4 {
+                positions.push([
+                    quad[i][0] / 16.0,
+                    quad[i][1] / 16.0,
+                    quad[i][2] / 16.0,
+                ]);
+                normals.push(normal);
+                uvs.push([
+                    uv_corners[i][0] / tex_w,
+                    uv_corners[i][1] / tex_h,
+                ]);
+            }
+            indices.extend_from_slice(&[start, start + 1, start + 2, start, start + 2, start + 3]);
+        }
+
+        let pos_accessor = buf.push_vec3(&positions, true);
+        let normal_accessor = buf.push_vec3(&normals, false);
+        let uv_accessor = buf.push_vec2(&uvs);
+        let index_accessor = buf.push_indices(&indices);
+        primitives.push(json!({
+            "attributes": {
+                "POSITION": pos_accessor,
+                "NORMAL": normal_accessor,
+                "TEXCOORD_0": uv_accessor
+            },
+            "indices": index_accessor,
+            "material": material_of_tex[&tex],
+            "mode": 4
+        }));
+    }
+
+    if primitives.is_empty() {
+        return None;
+    }
+    meshes.push(json!({ "name": cube.name, "primitives": primitives }));
+    Some(meshes.len() - 1)
+}
+
+fn write_gltf(doc: &Doc, name: &str) -> Converted {
+    let stem = crate::store::sanitize_file_name(name);
+    let mut warnings = doc.warnings.clone();
+    if !doc.animations.is_empty() {
+        warnings.push("glTF 导出暂不包含动画，动画未导出".to_string());
+    }
+
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut images: Vec<Value> = Vec::new();
+    let mut textures_json: Vec<Value> = Vec::new();
+    let mut materials: Vec<Value> = Vec::new();
+    let mut material_of_tex: HashMap<usize, usize> = HashMap::new();
+    for (index, texture) in doc.textures.iter().enumerate() {
+        if texture.data.is_empty() {
+            continue;
+        }
+        let file_name = texture_file_name(&stem, texture, index);
+        files.push((file_name.clone(), texture.data.clone()));
+        images.push(json!({
+            "uri": file_name,
+            "mimeType": texture_mime(&texture.name)
+        }));
+        textures_json.push(json!({
+            "source": images.len() - 1,
+            "sampler": 0
+        }));
+        let material_name = if texture.name.is_empty() {
+            format!("texture_{}", index + 1)
+        } else {
+            texture.name.clone()
+        };
+        materials.push(json!({
+            "name": material_name,
+            "pbrMetallicRoughness": {
+                "baseColorTexture": { "index": textures_json.len() - 1 },
+                "metallicFactor": 0.0,
+                "roughnessFactor": 1.0
+            },
+            "alphaMode": "BLEND",
+            "doubleSided": true
+        }));
+        material_of_tex.insert(index, materials.len() - 1);
+    }
+    if materials.is_empty() {
+        // 无贴图时使用纯色材质
+        materials.push(json!({
+            "name": "default",
+            "pbrMetallicRoughness": {
+                "baseColorFactor": [1.0, 1.0, 1.0, 1.0],
+                "metallicFactor": 0.0,
+                "roughnessFactor": 1.0
+            },
+            "doubleSided": true
+        }));
+    }
+
+    let mut buf = GltfBuffers::default();
+    let mut meshes: Vec<Value> = Vec::new();
+    let mut nodes: Vec<Value> = Vec::new();
+    let mut bone_children: Vec<Vec<usize>> = vec![Vec::new(); doc.bones.len()];
+    let mut roots: Vec<usize> = Vec::new();
+
+    for bone in doc.bones.iter() {
+        let mut node = json!({
+            "name": bone.name,
+            "translation": [bone.pivot[0] as f64 / 16.0, bone.pivot[1] as f64 / 16.0, bone.pivot[2] as f64 / 16.0]
+        });
+        if bone.rotation.iter().any(|v| v.abs() > 1e-6) {
+            let q = quat_from_euler(bone.rotation);
+            node["rotation"] = json!([q[0], q[1], q[2], q[3]]);
+        }
+        nodes.push(node);
+    }
+    for (index, bone) in doc.bones.iter().enumerate() {
+        if let Some(parent) = bone.parent {
+            if parent < doc.bones.len() {
+                bone_children[parent].push(index);
+            } else {
+                roots.push(index);
+            }
+        } else {
+            roots.push(index);
+        }
+    }
+
+    for cube in &doc.cubes {
+        let Some(mesh_index) = build_gltf_cube_mesh(cube, doc, &mut buf, &material_of_tex, &mut meshes)
+        else {
+            continue;
+        };
+        let parent_pivot = cube
+            .bone
+            .and_then(|b| doc.bones.get(b))
+            .map(|b| b.pivot)
+            .unwrap_or([0.0; 3]);
+        let mut node = json!({
+            "name": cube.name,
+            "mesh": mesh_index,
+            "translation": [
+                (cube.origin[0] - parent_pivot[0]) as f64 / 16.0,
+                (cube.origin[1] - parent_pivot[1]) as f64 / 16.0,
+                (cube.origin[2] - parent_pivot[2]) as f64 / 16.0
+            ]
+        });
+        if cube.rotation.iter().any(|v| v.abs() > 1e-6) {
+            let q = quat_from_euler(cube.rotation);
+            node["rotation"] = json!([q[0], q[1], q[2], q[3]]);
+        }
+        let node_index = nodes.len();
+        nodes.push(node);
+        match cube.bone {
+            Some(bone) if bone < doc.bones.len() => bone_children[bone].push(node_index),
+            _ => roots.push(node_index),
+        }
+    }
+
+    for (index, children) in bone_children.iter().enumerate() {
+        if !children.is_empty() {
+            nodes[index]["children"] = json!(children);
+        }
+    }
+
+    let bin_name = format!("{stem}.bin");
+    let mut root = json!({
+        "asset": {
+            "version": "2.0",
+            "generator": "tsrbox"
+        },
+        "scene": 0,
+        "scenes": [{ "name": stem, "nodes": roots }],
+        "nodes": nodes,
+        "meshes": meshes,
+        "materials": materials,
+        "buffers": [{ "uri": bin_name, "byteLength": buf.data.len() }],
+        "bufferViews": buf.views,
+        "accessors": buf.accessors
+    });
+    if !textures_json.is_empty() {
+        root["textures"] = json!(textures_json);
+        root["images"] = json!(images);
+        root["samplers"] = json!([{ "magFilter": 9728, "minFilter": 9728, "wrapS": 33071, "wrapT": 33071 }]);
+    }
+
+    files.push((bin_name, buf.data));
+    files.push((
+        format!("{stem}.gltf"),
+        serde_json::to_vec(&root).unwrap_or_default(),
+    ));
+    Converted { files, warnings }
+}
+
 /// 把模型目录中的主文件 + 贴图 + 动作文件转换为目标格式
 pub fn convert_model(
     dir: &Path,
@@ -1916,6 +2371,7 @@ pub fn convert_model(
         Format::Generic => write_bbmodel_like(&doc, name, "free"),
         Format::Bedrock => write_bedrock(&doc, name),
         Format::Java => write_java(&doc, name),
+        Format::Gltf => write_gltf(&doc, name),
         Format::Original => unreachable!(),
     })
 }
@@ -2013,6 +2469,48 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn bbmodel_to_gltf() {
+        let dir = temp_dir("gltf");
+        let source = sample_bbmodel();
+        fs::write(dir.join("demo.bbmodel"), serde_json::to_vec(&source).unwrap()).unwrap();
+        fs::write(dir.join("demo.png"), sample_png()).unwrap();
+
+        let converted = convert_model(&dir, "demo.bbmodel", &[], &[], Format::Gltf, "demo").unwrap();
+        let gltf = converted
+            .files
+            .iter()
+            .find(|(name, _)| name == "demo.gltf")
+            .map(|(_, bytes)| serde_json::from_slice::<Value>(bytes).unwrap())
+            .expect("demo.gltf 未生成");
+        assert!(converted
+            .files
+            .iter()
+            .any(|(name, _)| name == "demo.bin"));
+        assert!(converted
+            .files
+            .iter()
+            .any(|(name, _)| name == "demo.png"));
+
+        assert_eq!(gltf["asset"]["version"], "2.0");
+        let primitives = gltf["meshes"][0]["primitives"]
+            .as_array()
+            .expect("primitives 缺失");
+        let position_accessor = primitives[0]["attributes"]["POSITION"].as_u64().unwrap() as usize;
+        let index_accessor = primitives[0]["indices"].as_u64().unwrap() as usize;
+        let positions = &gltf["accessors"][position_accessor];
+        assert_eq!(positions["count"], 24);
+        let min = positions["min"].as_array().unwrap();
+        let max = positions["max"].as_array().unwrap();
+        // 立方体 from [-4,8,-2] to [4,16,2]，origin [0,12,0]，按 1/16 缩放
+        assert!((min[0].as_f64().unwrap() + 0.25).abs() < 1e-4);
+        assert!((max[0].as_f64().unwrap() - 0.25).abs() < 1e-4);
+        assert!((min[1].as_f64().unwrap() + 0.25).abs() < 1e-4);
+        assert!((max[1].as_f64().unwrap() - 0.25).abs() < 1e-4);
+        assert_eq!(gltf["accessors"][index_accessor]["count"], 36);
+        assert!(gltf["nodes"].as_array().unwrap().len() >= 2);
     }
 
     #[test]

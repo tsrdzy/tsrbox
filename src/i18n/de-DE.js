@@ -89,6 +89,7 @@ export default {
     title: 'Ordner',
     create: 'Neuer Ordner',
     allFiles: 'Alle Dateien',
+    unfiled: 'Nicht eingeordnet',
     empty: 'Noch keine Ordner, klicke auf + zum Erstellen',
     emptyFolder: 'Dieser Ordner enthält noch keine Modelle',
     rename: 'Ordner umbenennen',
@@ -189,14 +190,16 @@ export default {
       bbmodel: "BBMODEL-Projekt",
       bedrock: "Bedrock-JSON",
       java: "Java-JSON",
-      generic: "Generisches JSON"
+      generic: "Generisches JSON",
+      gltf: "glTF 2.0"
     },
     desc: {
       original: "Behält die Originaldateien ohne Konvertierung",
       bbmodel: "Blockbench-Projekt mit eingebetteten Texturen und Animationen",
       bedrock: "Geometrie .geo.json + Animation .animation.json + Textur; Animationen werden konvertiert",
       java: "Java-Blockmodell (0-16-Koordinaten, Einzelachsendrehung); keine Animationen",
-      generic: "Generische JSON-Struktur, wieder in Blockbench importierbar, behält Animationen"
+      generic: "Generische JSON-Struktur, wieder in Blockbench importierbar, behält Animationen",
+      gltf: "glTF-2.0-Szene (.gltf + .bin + Texturen), importierbar in Blender / three.js; Animationen werden nicht exportiert"
     }
   },
   recycle: {
@@ -212,7 +215,8 @@ export default {
     deleted: "Endgültig gelöscht",
     emptyBin: "Papierkorb leeren",
     emptyConfirm: "Papierkorb leeren? Alle Modelle werden endgültig gelöscht.",
-    emptied: "Papierkorb geleert ({count} Modelle)"
+    emptied: "Papierkorb geleert ({count} Modelle)",
+    emptying: "Papierkorb wird geleert ({count} Modelle)…"
   },
   init: {
     defaultLibraryName: "Modellbibliothek",
@@ -237,6 +241,13 @@ export default {
     switchLibrary: 'Bibliothek wechseln'
   },
   home: {
+    regenCovers: 'Cover neu generieren',
+    regenCoversConfirm: 'Cover für {count} Modelle im Hintergrund neu rendern (inkl. Idle-Pose). Du kannst weiterarbeiten. Jetzt starten?',
+    regenCoversDone: 'Cover neu erstellt: {success} erfolgreich, {failed} fehlgeschlagen',
+    regenCoversProgress: 'Cover werden aktualisiert: {current}/{total}',
+    regenCoversCancel: 'Cover-Aktualisierung abbrechen',
+    regenCoversCancelConfirm: 'Cover-Aktualisierung abbrechen? Bereits erzeugte Cover bleiben erhalten.',
+    regenCoversCancelled: 'Cover-Aktualisierung abgebrochen: {success} Cover aktualisiert',
     sameFilesTitle: 'Identische Modelle gefunden',
     sameFilesBatch: '{count} Einträge mit identischer Modelldatei und Texturen gefunden. Fortfahren und überschreiben?',
     overwriteAll: 'Alle überschreiben',
@@ -258,6 +269,7 @@ export default {
     noModel: 'Noch keine Modelle. Klicken Sie auf "Modell hochladen", um das erste hinzuzufügen',
     noMatch: 'Keine passenden Modelle',
     coverPlaceholder: 'Keine Vorschau',
+    dragOutHint: 'Zum Exportieren aus dem Fenster ziehen',
     animationCount: '{count} Animationen',
     moreTags: '+{count}',
     confirmBatchDelete: "Die {count} ausgewählten Modelle in den Papierkorb verschieben? Du kannst sie später wiederherstellen.",
@@ -266,6 +278,7 @@ export default {
     tagsAdded: '{count} Tags hinzugefügt',
     deletionSuccess: 'Löschung erfolgreich',
     deletionFailed: 'Löschung fehlgeschlagen',
+    deleting: '{count} Modelle werden in den Papierkorb verschoben…',
     renameModel: 'Modell umbenennen',
     enterName: 'Bitte Modellnamen eingeben',
     renamed: 'Umbenannt',

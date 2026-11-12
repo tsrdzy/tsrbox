@@ -2,16 +2,19 @@
 import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElLoading } from 'element-plus'
 import { useStore } from '../composables/useStore'
+import { useCovers } from '../composables/useCovers'
 
 const { t } = useI18n()
 const router = useRouter()
 const { loadAll } = useStore()
+const covers = useCovers()
 
 const models = ref([])
 const retentionDays = ref(30)
 const loading = ref(false)
+const emptying = ref(false)
 
 async function load() {
   loading.value = true
@@ -19,6 +22,8 @@ async function load() {
     const res = await window.api.models.listDeleted()
     models.value = res?.models || []
     retentionDays.value = Number(res?.retentionDays) || 30
+    // 封面懒加载进共享缓存，列表接口不再内嵌 base64
+    models.value.forEach((m) => covers.ensureCover(m))
   } catch (e) {
     ElMessage.error(e.message || t('common.failed'))
   } finally {
@@ -84,7 +89,7 @@ async function remove(model) {
 }
 
 async function emptyAll() {
-  if (!models.value.length) return
+  if (!models.value.length || emptying.value) return
   try {
     await ElMessageBox.confirm(t('recycle.emptyConfirm'), t('recycle.emptyBin'), {
       confirmButtonText: t('recycle.emptyBin'),
@@ -95,12 +100,22 @@ async function emptyAll() {
   } catch {
     return
   }
+  emptying.value = true
+  const mask = ElLoading.service({
+    lock: true,
+    text: t('recycle.emptying', { count: models.value.length }),
+    background: 'rgba(0, 0, 0, 0.35)'
+  })
   try {
     const res = await window.api.models.emptyRecycle()
     ElMessage.success(t('recycle.emptied', { count: res?.removed || 0 }))
+    models.value = []
     await load()
   } catch (e) {
     ElMessage.error(e.message || t('common.failed'))
+  } finally {
+    mask.close()
+    emptying.value = false
   }
 }
 
@@ -120,8 +135,8 @@ onMounted(load)
       <el-button
         type="danger"
         plain
-        :disabled="!models.length"
-        :loading="loading"
+        :disabled="!models.length || emptying"
+        :loading="emptying"
         @click="emptyAll"
       >
         <i class="iconfont icon-trash-alt"></i> {{ t('recycle.emptyBin') }}
@@ -132,7 +147,7 @@ onMounted(load)
       <div v-if="models.length" class="recycle-list">
         <div v-for="model in models" :key="model.id" class="recycle-item">
           <div class="recycle-cover">
-            <img v-if="model.coverBase64" :src="model.coverBase64" alt="cover" />
+            <img v-if="covers.coverOf(model.id)" :src="covers.coverOf(model.id)" alt="cover" />
             <span v-else class="recycle-cover-empty">{{ t('upload.noPreview') }}</span>
           </div>
           <div class="recycle-info">
@@ -154,7 +169,11 @@ onMounted(load)
           </div>
         </div>
       </div>
-      <el-empty v-else :description="t('recycle.empty')" />
+      <el-empty v-else :description="t('recycle.empty')">
+        <template #image>
+          <i class="iconfont icon-trash-alt empty-state-icon"></i>
+        </template>
+      </el-empty>
     </div>
   </div>
 </template>

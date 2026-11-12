@@ -161,3 +161,17 @@ button:focus-visible,
 .chip-removable .chip-x:hover {
   opacity: 1;
 }
+
+/* ====== 空状态 ====== */
+/* 用应用自己的图标替换 Element Plus 默认箱子插画 */
+.el-empty__image {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.iconfont.empty-state-icon {
+  font-size: 80px;
+  line-height: 1;
+  color: var(--text-3);
+  opacity: 0.45;
+}

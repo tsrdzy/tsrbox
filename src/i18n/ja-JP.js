@@ -89,6 +89,7 @@ export default {
     title: 'フォルダ',
     create: '新規フォルダ',
     allFiles: 'すべてのファイル',
+    unfiled: '未分類',
     empty: 'フォルダはまだありません。右上の + から作成できます',
     emptyFolder: 'このフォルダにはまだモデルがありません',
     rename: 'フォルダ名を変更',
@@ -189,14 +190,16 @@ export default {
       bbmodel: "BBMODEL プロジェクト",
       bedrock: "統合版 JSON",
       java: "Java 版 JSON",
-      generic: "汎用 JSON"
+      generic: "汎用 JSON",
+      gltf: "glTF 2.0"
     },
     desc: {
       original: "元のモデルファイルをそのまま保持します",
       bbmodel: "テクスチャとアニメーションを埋め込んだ Blockbench プロジェクト",
       bedrock: "ジオメトリ .geo.json + アニメーション .animation.json + テクスチャ。アニメーションも変換します",
       java: "Java 版ブロックモデル（0-16 座標、単軸回転）。アニメーション非対応",
-      generic: "汎用 JSON 構造。Blockbench に再インポート可能で、アニメーションも保持します"
+      generic: "汎用 JSON 構造。Blockbench に再インポート可能で、アニメーションも保持します",
+      gltf: "glTF 2.0 シーン（.gltf + .bin + テクスチャ）。Blender / three.js に読み込めます。アニメーションは出力されません"
     }
   },
   recycle: {
@@ -212,7 +215,8 @@ export default {
     deleted: "完全に削除しました",
     emptyBin: "ゴミ箱を空にする",
     emptyConfirm: "ゴミ箱を空にしますか？すべてのモデルが完全に削除されます。",
-    emptied: "ゴミ箱を空にしました（{count} 個）"
+    emptied: "ゴミ箱を空にしました（{count} 個）",
+    emptying: "ゴミ箱を空にしています（{count} 個）…"
   },
   init: {
     defaultLibraryName: "モデルライブラリ",
@@ -237,6 +241,13 @@ export default {
     switchLibrary: 'ライブラリを切り替え'
   },
   home: {
+    regenCovers: 'カバーを再生成',
+    regenCoversConfirm: '{count} 個のモデルのカバーをバックグラウンドで再描画します（idle 姿勢を含む）。作業は続けられます。開始しますか？',
+    regenCoversDone: 'カバー再生成完了：成功 {success}、失敗 {failed}',
+    regenCoversProgress: 'カバー更新中：{current}/{total}',
+    regenCoversCancel: 'カバー更新をキャンセル',
+    regenCoversCancelConfirm: 'カバー更新をキャンセルしますか？生成済みのカバーは保持されます。',
+    regenCoversCancelled: 'カバー更新をキャンセルしました：{success} 件を更新済み',
     sameFilesTitle: '同一モデルを検出',
     sameFilesBatch: '{count} 件のモデルファイルとテクスチャが完全に一致する記録があります。続行して上書きしますか？',
     overwriteAll: 'すべて上書き',
@@ -258,6 +269,7 @@ export default {
     noModel: 'まだモデルがありません。「モデルをアップロード」をクリックして最初のモデルを追加します',
     noMatch: '一致するモデルがありません',
     coverPlaceholder: 'プレビューなし',
+    dragOutHint: 'ウィンドウ外にドラッグしてエクスポート',
     animationCount: '{count} アニメーション',
     moreTags: '+{count}',
     confirmBatchDelete: "選択した {count} 個のモデルをゴミ箱に移動しますか？後で復元できます。",
@@ -266,6 +278,7 @@ export default {
     tagsAdded: '{count} 個のタグが追加されました',
     deletionSuccess: '削除成功',
     deletionFailed: '削除失敗',
+    deleting: '{count} 個のモデルをゴミ箱に移動しています…',
     renameModel: 'モデル名を変更',
     enterName: 'モデル名を入力してください',
     renamed: '名前を変更しました',

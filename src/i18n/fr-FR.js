@@ -89,6 +89,7 @@ export default {
     title: 'Dossiers',
     create: 'Nouveau dossier',
     allFiles: 'Tous les fichiers',
+    unfiled: 'Non classés',
     empty: 'Aucun dossier, cliquez sur + pour en créer un',
     emptyFolder: 'Ce dossier ne contient encore aucun modèle',
     rename: 'Renommer le dossier',
@@ -189,14 +190,16 @@ export default {
       bbmodel: "Projet BBMODEL",
       bedrock: "JSON Bedrock",
       java: "JSON Java",
-      generic: "JSON générique"
+      generic: "JSON générique",
+      gltf: "glTF 2.0"
     },
     desc: {
       original: "Conserve les fichiers d'origine sans conversion",
       bbmodel: "Projet Blockbench avec textures et animations intégrées",
       bedrock: "Géométrie .geo.json + animation .animation.json + texture ; les animations sont converties",
       java: "Modèle de bloc Java (coordonnées 0-16, rotation sur un axe) ; animations non prises en charge",
-      generic: "Structure JSON générique, réimportable dans Blockbench, conserve les animations"
+      generic: "Structure JSON générique, réimportable dans Blockbench, conserve les animations",
+      gltf: "Scène glTF 2.0 (.gltf + .bin + textures), importable dans Blender / three.js ; animations non exportées"
     }
   },
   recycle: {
@@ -212,7 +215,8 @@ export default {
     deleted: "Supprimé définitivement",
     emptyBin: "Vider la corbeille",
     emptyConfirm: "Vider la corbeille ? Tous les modèles seront supprimés définitivement.",
-    emptied: "Corbeille vidée ({count} modèles)"
+    emptied: "Corbeille vidée ({count} modèles)",
+    emptying: "Vidage de la corbeille ({count} modèles)…"
   },
   init: {
     defaultLibraryName: "Bibliothèque de modèles",
@@ -237,6 +241,13 @@ export default {
     switchLibrary: 'Changer de bibliothèque'
   },
   home: {
+    regenCovers: 'Régénérer les couvertures',
+    regenCoversConfirm: 'Régénérer les couvertures de {count} modèles en arrière-plan (pose idle incluse). Vous pouvez continuer à travailler. Commencer ?',
+    regenCoversDone: 'Couvertures régénérées : {success} réussies, {failed} échouées',
+    regenCoversProgress: 'Actualisation des couvertures : {current}/{total}',
+    regenCoversCancel: "Annuler l'actualisation des couvertures",
+    regenCoversCancelConfirm: "Annuler l'actualisation des couvertures ? Les couvertures déjà générées seront conservées.",
+    regenCoversCancelled: 'Actualisation annulée : {success} couvertures mises à jour',
     sameFilesTitle: 'Modèles identiques détectés',
     sameFilesBatch: '{count} enregistrements avec le même modèle et les mêmes textures. Continuer et écraser ?',
     overwriteAll: 'Tout écraser',
@@ -258,6 +269,7 @@ export default {
     noModel: 'Aucun modèle pour le moment. Cliquez sur "Téléverser" pour ajouter le premier',
     noMatch: 'Aucun modèle correspondant',
     coverPlaceholder: 'Pas d\'aperçu',
+    dragOutHint: 'Faites glisser hors de la fenêtre pour exporter',
     animationCount: '{count} animations',
     moreTags: '+{count}',
     confirmBatchDelete: "Déplacer les {count} modèles sélectionnés vers la corbeille ? Vous pourrez les restaurer.",
@@ -266,6 +278,7 @@ export default {
     tagsAdded: '{count} étiquettes ajoutées',
     deletionSuccess: 'Suppression réussie',
     deletionFailed: 'Suppression échouée',
+    deleting: 'Déplacement de {count} modèles vers la corbeille…',
     renameModel: 'Renommer le modèle',
     enterName: 'Saisissez le nom du modèle',
     renamed: 'Renommé',

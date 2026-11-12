@@ -1,12 +1,13 @@
 <script setup>
-import { ref, reactive, onMounted, onBeforeUnmount, computed, watch } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount, computed, watch, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { useStore } from './composables/useStore'
-import { useFolderStore, FOLDER_COLORS } from './stores/folders'
+import { useFolderStore, FOLDER_COLORS, UNFILED_ID } from './stores/folders'
 import { useTagFilterStore } from './stores/tagFilter'
 import { useSettingsStore } from './stores/settings'
 import { pluginSlots } from './pluginManager'
+import { useCoverRenderer } from './composables/useCoverRenderer'
 import TagFilterBar from './components/TagFilterBar.vue'
 import { ElMessageBox, ElMessage, ElConfigProvider } from 'element-plus'
 import UploadProgress from './components/UploadProgress.vue'
@@ -36,6 +37,20 @@ const elementPlusLocales = {
 }
 
 const { state, checkStatus, loadAll, saveSettings } = useStore()
+
+// 全局封面渲染器：隐藏查看器常驻此处，跨页面持续渲染封面
+const ModelViewer = defineAsyncComponent(() => import('./components/ModelViewer.vue'))
+const {
+  mounted: crMounted,
+  buffer: crBuffer,
+  fileType: crType,
+  auxFiles: crAux,
+  viewParams: crParams,
+  viewerRef: crViewerRef,
+  regen: coverRegen,
+  onViewerLoaded: onCoverLoaded,
+  onViewerError: onCoverError
+} = useCoverRenderer()
 const foldersStore = useFolderStore()
 const tagFilter = useTagFilterStore()
 const settingsStore = useSettingsStore()
@@ -165,6 +180,11 @@ const folderCounts = computed(() => {
 function folderCount(id) {
   return folderCounts.value[id] || 0
 }
+
+/** 「未入文件夹」模型数：folderId 为空的模型 */
+const unfiledCount = computed(
+  () => state.models.filter((model) => !model.folderId).length
+)
 
 function selectFolder(id) {
   // 刚完成的文件夹拖拽不应触发选中
@@ -415,8 +435,9 @@ function onFolderMouseMove(event) {
   const draggedId = folderPress.folder.id
   const rowEl = pointEl.closest('[data-folder-drop]')
 
-  // 侧边栏空白区域 / 「全部文件」行 → 顶层末尾
-  if (!rowEl || rowEl.getAttribute('data-folder-drop') === '__all__') {
+  // 侧边栏空白区域 / 「全部文件」「未入文件夹」行 → 顶层末尾
+  const dropKey = rowEl?.getAttribute('data-folder-drop')
+  if (!rowEl || dropKey === '__all__' || dropKey === UNFILED_ID) {
     const siblings = foldersStore.childrenOf('').filter((folder) => folder.id !== draggedId)
     folderDropIndicator.value = {
       type: 'root',
@@ -726,6 +747,16 @@ onBeforeUnmount(() => {
       <div class="titlebar-drag" data-tauri-drag-region />
 
       <div class="titlebar-right">
+        <!-- 上传任务进度（标题栏右侧） -->
+        <UploadProgress />
+        <!-- 封面重建进度 -->
+        <div v-if="coverRegen.running" class="title-regen" :title="t('home.regenCovers')">
+          <svg class="regen-spin" viewBox="0 0 20 20" fill="none">
+            <circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="2" opacity="0.3" />
+            <path d="M18 10a8 8 0 0 0-8-8" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+          <span>{{ t('home.regenCoversProgress', { current: coverRegen.current, total: coverRegen.total }) }}</span>
+        </div>
         <div
           v-if="settingsStore.showThemeInTitlebar"
           class="title-btn theme-btn"
@@ -794,6 +825,21 @@ onBeforeUnmount(() => {
               <i class="iconfont icon-folder folder-icon"></i>
               <span class="folder-name">{{ t('folders.allFiles') }}</span>
               <span class="folder-count">{{ state.models.length }}</span>
+            </div>
+            <!-- 未入文件夹：显示所有未分到文件夹的模型 -->
+            <div
+              class="folder-item"
+              :class="{
+                active: foldersStore.activeFolderId === UNFILED_ID,
+                'drop-over': foldersStore.dragOverKey === UNFILED_ID
+              }"
+              :data-folder-drop="UNFILED_ID"
+              :title="t('folders.unfiled')"
+              @click="selectFolder(UNFILED_ID)"
+            >
+              <i class="iconfont icon-folder folder-icon"></i>
+              <span class="folder-name">{{ t('folders.unfiled') }}</span>
+              <span class="folder-count">{{ unfiledCount }}</span>
             </div>
             <template v-for="folder in foldersStore.visibleFolders" :key="folder.id">
               <div
@@ -1086,12 +1132,58 @@ onBeforeUnmount(() => {
       <div class="folder-drag-hint-label">{{ folderDragHint.label }}</div>
     </div>
 
-    <UploadProgress />
+    <!-- 全局隐藏渲染器：批量上传 / 重建封面共用，常驻不随路由卸载 -->
+    <div v-if="crMounted" class="hidden-viewer">
+      <ModelViewer
+        ref="crViewerRef"
+        :buffer="crBuffer"
+        :file-type="crType"
+        :aux-files="crAux"
+        :view-params="crParams"
+        @loaded="onCoverLoaded"
+        @error="onCoverError"
+      />
+    </div>
   </div>
   </ElConfigProvider>
 </template>
 
 <style scoped>
+/* 全局隐藏渲染器：移出视口但保持可渲染尺寸 */
+.hidden-viewer {
+  position: fixed;
+  left: -10000px;
+  top: -10000px;
+  width: 320px;
+  height: 320px;
+  pointer-events: none;
+  opacity: 0;
+  z-index: -1;
+}
+/* 标题栏封面重建进度 */
+.title-regen {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-secondary, #8b93a3);
+  background: var(--bg-soft, rgba(128, 128, 128, 0.12));
+  margin-right: 6px;
+  user-select: none;
+}
+.title-regen .regen-spin {
+  width: 12px;
+  height: 12px;
+  animation: cr-spin 1s linear infinite;
+}
+@keyframes cr-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
 .app-shell {
   width: 100%;
   height: 100%;

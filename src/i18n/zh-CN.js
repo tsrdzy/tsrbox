@@ -89,6 +89,7 @@ export default {
     title: '文件夹',
     create: '新建文件夹',
     allFiles: '全部文件',
+    unfiled: '未入文件夹',
     empty: '还没有文件夹，点击右上角 + 新建',
     emptyFolder: '这个文件夹里还没有模型',
     rename: '重命名文件夹',
@@ -189,14 +190,16 @@ export default {
       bbmodel: "BBMODEL 工程",
       bedrock: "基岩版 JSON",
       java: "Java 版 JSON",
-      generic: "通用 JSON"
+      generic: "通用 JSON",
+      gltf: "glTF 2.0"
     },
     desc: {
       original: "保留模型原始文件，不做格式转换",
       bbmodel: "Blockbench 工程文件，贴图与动画内嵌",
       bedrock: "几何 .geo.json + 动画 .animation.json + 贴图，动画同步转换",
       java: "Java 版方块模型（0-16 坐标、单轴旋转），不支持动画",
-      generic: "通用 JSON 结构，可重新导入 Blockbench，保留动画"
+      generic: "通用 JSON 结构，可重新导入 Blockbench，保留动画",
+      gltf: "glTF 2.0 场景（.gltf + .bin + 贴图），可导入 Blender / three.js，动画不导出"
     }
   },
   recycle: {
@@ -212,7 +215,8 @@ export default {
     deleted: "已永久删除",
     emptyBin: "清空回收站",
     emptyConfirm: "确定清空回收站吗？其中所有模型将被永久删除。",
-    emptied: "已清空回收站（{count} 个模型）"
+    emptied: "已清空回收站（{count} 个模型）",
+    emptying: "正在清空回收站（{count} 个模型）…"
   },
   init: {
     defaultLibraryName: "模型资源库",
@@ -237,6 +241,13 @@ export default {
     closeLibrary: '关闭资源库'
   },
   home: {
+    regenCovers: '重新生成封面',
+    regenCoversConfirm: '将为当前资源库 {count} 个模型重新渲染封面（含 idle 姿态），期间可继续正常操作。确定开始吗？',
+    regenCoversDone: '封面重建完成：成功 {success} 个，失败 {failed} 个',
+    regenCoversProgress: '预览图刷新中：{current}/{total}',
+    regenCoversCancel: '取消刷新预览图',
+    regenCoversCancelConfirm: '确定取消刷新预览图吗？已生成的预览图会保留更新。',
+    regenCoversCancelled: '已取消刷新预览图，已更新 {success} 个封面',
     sameFilesTitle: '发现相同模型',
     sameFilesBatch: '发现 {count} 个模型文件与贴图完全相同的记录，是否继续上传并覆盖？',
     overwriteAll: '全部覆盖',
@@ -258,6 +269,7 @@ export default {
     noModel: '还没有模型，点击「上传模型」添加第一个',
     noMatch: '没有匹配的模型',
     coverPlaceholder: '无预览图',
+    dragOutHint: '拖到窗口外以导出',
     animationCount: '{count} 个动画',
     moreTags: '+{count}',
     confirmBatchDelete: "确定将选中的 {count} 个模型移入回收站吗？可在回收站中恢复。",
@@ -266,6 +278,7 @@ export default {
     tagsAdded: '{count} 个标签已添加',
     deletionSuccess: '删除成功',
     deletionFailed: '删除失败',
+    deleting: '正在把 {count} 个模型移入回收站…',
     renameModel: '重命名模型',
     enterName: '请输入模型名称',
     renamed: '已重命名',

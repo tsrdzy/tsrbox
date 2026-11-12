@@ -1,15 +1,14 @@
 <script setup>
-import { computed, ref, shallowRef, defineAsyncComponent } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSettingsStore } from '../stores/settings'
 import { useStore } from '../composables/useStore'
+import { useCoverRenderer } from '../composables/useCoverRenderer'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const { t, locale } = useI18n()
 const settingsStore = useSettingsStore()
 const { state, loadAll, saveSettings } = useStore()
-
-const ModelViewer = defineAsyncComponent(() => import('../components/ModelViewer.vue'))
 
 import pkg from '@root/package.json'
 const version = computed(() => pkg.version)
@@ -98,7 +97,7 @@ const languages = [
 ]
 
 // ===== 模型格式（资源库设置）=====
-const FORMAT_OPTIONS = ['original', 'bbmodel', 'bedrock', 'java', 'generic']
+const FORMAT_OPTIONS = ['original', 'bbmodel', 'bedrock', 'java', 'generic', 'gltf']
 const formatOptions = computed(() =>
   FORMAT_OPTIONS.map((value) => ({ value, label: t(`exportDialog.formats.${value}`) }))
 )
@@ -131,92 +130,16 @@ function changeLanguage(lang) {
   localStorage.setItem('imodel-language', lang)
 }
 
-// ===== 一键重新生成全部预览图 =====
-const regenerating = ref(false)
-const regenCurrent = ref(0)
-const regenTotal = ref(0)
 
-const viewerVisible = ref(false)
-const viewerKey = ref(0)
-const viewerBuffer = shallowRef(null)
-const viewerFileType = ref('')
-const viewerAux = ref([])
-const viewerViewParams = ref(null)
-const viewerRef = ref(null)
-
-let pendingResolve = null
-let pendingReject = null
-let renderTimeout = null
-
-function base64ToBytes(base64) {
-  const binary = atob(base64)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-  return bytes
-}
-
-function finishRender(cover, error) {
-  if (renderTimeout) {
-    clearTimeout(renderTimeout)
-    renderTimeout = null
-  }
-  const resolve = pendingResolve
-  const reject = pendingReject
-  pendingResolve = null
-  pendingReject = null
-  if (error) reject?.(error)
-  else resolve?.(cover)
-}
-
-function onViewerLoaded() {
-  if (!pendingResolve) return
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      let cover = ''
-      try {
-        cover = viewerRef.value?.captureThumbnail() || ''
-      } catch (e) {
-        finishRender('', e)
-        return
-      }
-      finishRender(cover)
-    })
-  })
-}
-
-function onViewerError(error) {
-  finishRender('', error instanceof Error ? error : new Error(String(error)))
-}
-
-function renderCoverForModel(model) {
-  return new Promise(async (resolve, reject) => {
-    try {
-      const res = await window.api.models.loadFile({
-        id: String(model.id),
-        fileName: String(model.fileName),
-        fileType: String(model.fileType),
-        files: JSON.parse(JSON.stringify(model.files || []))
-      })
-      pendingResolve = resolve
-      pendingReject = reject
-      viewerKey.value++
-      viewerBuffer.value = base64ToBytes(res.dataBase64)
-      viewerFileType.value = res.fileType
-      viewerAux.value = res.auxFiles || []
-      // 重新生成时统一自动取景，避免沿用旧封面/旧包围盒造成的错误视角
-      viewerViewParams.value = null
-      viewerVisible.value = true
-      renderTimeout = setTimeout(() => {
-        finishRender('', new Error('模型渲染超时'))
-      }, 30000)
-    } catch (e) {
-      reject(e)
-    }
-  })
-}
+// ===== 一键重新生成全部预览图（全局后台任务，切换页面不中断） =====
+const coverRenderer = useCoverRenderer()
+const coverRegen = coverRenderer.regen
+const regenerating = computed(() => coverRegen.running)
+const regenCurrent = computed(() => coverRegen.current)
+const regenTotal = computed(() => coverRegen.total)
 
 async function regenerateAllCovers() {
-  if (regenerating.value) return
+  if (coverRegen.running) return
   try {
     await ElMessageBox.confirm(t('settings.regenerateDesc'), t('settings.regenerateAll'), {
       confirmButtonText: t('settings.regenerateAll'),
@@ -226,37 +149,15 @@ async function regenerateAllCovers() {
   } catch {
     return
   }
-
-  regenerating.value = true
-  regenCurrent.value = 0
   try {
     const models = await window.api.models.list()
-    regenTotal.value = models.length
-    let success = 0
-    let failed = 0
-    for (const model of models) {
-      regenCurrent.value++
-      try {
-        const cover = await renderCoverForModel(model)
-        if (!cover) throw new Error('封面为空')
-        await window.api.models.saveImage(String(model.id), 'cover', cover)
-        success++
-      } catch (e) {
-        failed++
-        console.warn('[Settings] 预览图生成失败:', model.fileName, e)
-      }
-    }
+    const res = await coverRenderer.regenerateAll(models)
+    if (!res) return
     await loadAll()
-    if (failed > 0) ElMessage.warning(t('settings.regenerateFailed', { count: failed }))
-    else ElMessage.success(t('settings.regenerateDone', { count: success }))
+    if (res.failed > 0) ElMessage.warning(t('settings.regenerateFailed', { count: res.failed }))
+    else ElMessage.success(t('settings.regenerateDone', { count: res.success }))
   } catch (e) {
     ElMessage.error(e.message || t('settings.regenerateFailed', { count: 0 }))
-  } finally {
-    regenerating.value = false
-    viewerVisible.value = false
-    viewerBuffer.value = null
-    viewerAux.value = []
-    viewerViewParams.value = null
   }
 }
 </script>
@@ -411,18 +312,7 @@ async function regenerateAllCovers() {
       </el-card>
     </div>
 
-    <div v-if="viewerVisible" class="cover-renderer">
-      <ModelViewer
-        :key="viewerKey"
-        ref="viewerRef"
-        :buffer="viewerBuffer"
-        :file-type="viewerFileType"
-        :aux-files="viewerAux"
-        :view-params="viewerViewParams"
-        @loaded="onViewerLoaded"
-        @error="onViewerError"
-      />
-    </div>
+    <!-- 封面渲染由 App.vue 的全局隐藏渲染器承担 -->
   </div>
 </template>
 

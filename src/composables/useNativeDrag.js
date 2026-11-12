@@ -6,19 +6,26 @@ import { useStore } from './useStore'
  * 1. 拖到侧边栏文件夹 → 通过回调在应用内移动模型（不发起系统拖出）
  * 2. 拖到窗口外 → 调用主进程 startDrag，把资源源文件拖到桌面/其他应用
  *
+ * 拖动中有跟随指针的悬浮提示（文件名 + 数量 + 目标文件夹名），
+ * 鼠标移动事件经 rAF 节流，避免高频 elementFromPoint 造成卡顿。
+ *
  * @param {Object} options
  * @param {string} options.type - models | images | audios | fonts
  * @param {number} options.threshold - 触发拖动的位移阈值（px）
  * @param {string} options.folderSelector - 文件夹放置区选择器（带 data-folder-drop 属性）
  * @param {Function} options.onFolderHover - 悬停文件夹回调 (key) => void
  * @param {Function} options.onFolderDrop - 释放到文件夹回调 (key, ids) => void
+ * @param {Function} options.getFolderLabel - 取文件夹显示名 (key) => string
+ * @param {string|Function} options.outsideHint - 指针靠近窗口边缘时的提示文案
  */
 export function useNativeDrag({
   type,
   threshold = 6,
   folderSelector = '',
   onFolderHover = null,
-  onFolderDrop = null
+  onFolderDrop = null,
+  getFolderLabel = null,
+  outsideHint = ''
 } = {}) {
   const nativeDragActive = ref(false)
   let pressing = null
@@ -28,6 +35,11 @@ export function useNativeDrag({
   let upHandler = null
   let leaveHandler = null
   let suppressClick = false
+  // rAF 节流
+  let rafId = 0
+  let lastEvent = null
+  // 悬浮提示
+  let ghostEl = null
 
   function setDraggingCursor(on) {
     try {
@@ -37,6 +49,49 @@ export function useNativeDrag({
     }
   }
 
+  function ensureGhost() {
+    if (ghostEl) return
+    ghostEl = document.createElement('div')
+    ghostEl.className = 'tsrbox-drag-ghost'
+    document.body.appendChild(ghostEl)
+  }
+
+  function destroyGhost() {
+    if (ghostEl) {
+      ghostEl.remove()
+      ghostEl = null
+    }
+  }
+
+  function resolveOutsideHint() {
+    return typeof outsideHint === 'function' ? outsideHint() : outsideHint
+  }
+
+  /** 刷新悬浮提示的位置与内容 */
+  function refreshGhost(ev) {
+    if (!ghostEl || !pressing) return
+    ghostEl.style.transform = `translate(${ev.clientX + 14}px, ${ev.clientY + 16}px)`
+
+    const { item, selectedItems: list, folderKey, mode } = pressing
+    const useSelection =
+      list.length > 1 && list.some((x) => String(x.id) === String(item.id))
+    const count = useSelection ? list.length : 1
+    let label = item.fileName || ''
+    if (count > 1) label += ` ×${count}`
+
+    ghostEl.classList.remove('is-target', 'is-out')
+    if (mode === 'folder' && folderKey) {
+      const name = getFolderLabel?.(folderKey) || ''
+      if (name) label += ` → ${name}`
+      ghostEl.classList.add('is-target')
+    } else if (isOutsideWindow(ev)) {
+      const hint = resolveOutsideHint()
+      if (hint) label += ` · ${hint}`
+      ghostEl.classList.add('is-out')
+    }
+    if (ghostEl.textContent !== label) ghostEl.textContent = label
+  }
+
   function cleanup() {
     document.removeEventListener('mousemove', moveHandler)
     document.removeEventListener('mouseup', upHandler)
@@ -44,7 +99,13 @@ export function useNativeDrag({
     moveHandler = null
     upHandler = null
     leaveHandler = null
+    if (rafId) {
+      cancelAnimationFrame(rafId)
+      rafId = 0
+    }
+    lastEvent = null
     pressing = null
+    destroyGhost()
     setDraggingCursor(false)
   }
 
@@ -104,6 +165,52 @@ export function useNativeDrag({
     }, 15000)
   }
 
+  /** rAF 节流的移动处理：每帧最多一次 elementFromPoint / DOM 更新 */
+  function processMove() {
+    rafId = 0
+    const ev = lastEvent
+    if (!pressing || !ev) return
+
+    if (!pressing.mode) {
+      const dx = ev.clientX - startX
+      const dy = ev.clientY - startY
+      if (Math.abs(dx) < threshold && Math.abs(dy) < threshold) return
+      // 先进入「待定」状态：既能拖到侧边栏文件夹，也能拖出窗口
+      pressing.mode = 'maybe'
+      suppressClick = true
+      setDraggingCursor(true)
+      ensureGhost()
+    }
+
+    // 悬停在侧边栏文件夹 → 应用内移动
+    if (folderSelector) {
+      const dropEl = document
+        .elementFromPoint(ev.clientX, ev.clientY)
+        ?.closest(folderSelector)
+      const key = dropEl ? dropEl.getAttribute('data-folder-drop') || '' : ''
+
+      if (key) {
+        pressing.mode = 'folder'
+        if (key !== pressing.folderKey) {
+          pressing.folderKey = key
+          onFolderHover?.(key)
+        }
+      } else if (pressing.mode === 'folder') {
+        // 移出文件夹区域，回到待定状态
+        pressing.mode = 'maybe'
+        pressing.folderKey = ''
+        onFolderHover?.('')
+      }
+    }
+
+    refreshGhost(ev)
+
+    // 指针移出窗口 → 转为系统拖出
+    if (isOutsideWindow(ev)) {
+      startNativeDrag(pressing.item, pressing.selectedItems)
+    }
+  }
+
   /**
    * @param {MouseEvent} e
    * @param {Object} item - 当前按压的资源
@@ -124,44 +231,8 @@ export function useNativeDrag({
 
     moveHandler = (ev) => {
       if (!pressing) return
-
-      if (!pressing.mode) {
-        const dx = ev.clientX - startX
-        const dy = ev.clientY - startY
-        if (Math.abs(dx) < threshold && Math.abs(dy) < threshold) return
-        // 先进入「待定」状态：既能拖到侧边栏文件夹，也能拖出窗口
-        pressing.mode = 'maybe'
-        suppressClick = true
-        setDraggingCursor(true)
-      }
-
-      // 悬停在侧边栏文件夹 → 应用内移动
-      if (folderSelector) {
-        const dropEl = document
-          .elementFromPoint(ev.clientX, ev.clientY)
-          ?.closest(folderSelector)
-        const key = dropEl ? dropEl.getAttribute('data-folder-drop') || '' : ''
-
-        if (key) {
-          pressing.mode = 'folder'
-          if (key !== pressing.folderKey) {
-            pressing.folderKey = key
-            onFolderHover?.(key)
-          }
-          return
-        }
-        if (pressing.mode === 'folder') {
-          // 移出文件夹区域，回到待定状态
-          pressing.mode = 'maybe'
-          pressing.folderKey = ''
-          onFolderHover?.('')
-        }
-      }
-
-      // 指针移出窗口 → 转为系统拖出
-      if (isOutsideWindow(ev)) {
-        startNativeDrag(pressing.item, pressing.selectedItems)
-      }
+      lastEvent = ev
+      if (!rafId) rafId = requestAnimationFrame(processMove)
     }
 
     leaveHandler = () => {

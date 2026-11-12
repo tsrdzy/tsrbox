@@ -1,285 +1,326 @@
-<script setup>
-import { computed } from 'vue'
-import { useUploadStore } from '../stores/upload'
-
-const store = useUploadStore()
-
-const visible = computed(() => store.barVisible && store.tasks.length > 0)
-const showRestore = computed(() => !store.barVisible && store.tasks.length > 0)
-</script>
-
 <template>
-  <div>
-    <!-- 收起后的恢复入口 -->
-    <transition name="up-fade">
-      <div v-if="showRestore" class="upload-restore" :title="'查看上传进度'" @click="store.showBar()">
-        <span class="upload-restore-icon">&#xeb56;</span>
-        <span class="upload-restore-text">{{ store.overallPercent }}%</span>
-      </div>
-    </transition>
+  <div class="up-wrap">
+    <!-- 收起后：标题栏右侧的小胶囊，点击展开 -->
+    <button v-if="store.restoreVisible" class="upload-restore" @click="store.restorePanel">
+      <span class="restore-spinner" :class="{ done: store.overallPercent >= 100 }">
+        <svg v-if="store.overallPercent < 100" viewBox="0 0 20 20" fill="none">
+          <circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="2" opacity="0.3" />
+          <path d="M18 10a8 8 0 0 0-8-8" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+        </svg>
+        <svg v-else viewBox="0 0 20 20" fill="none">
+          <circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="2" />
+          <path d="M6.5 10.5l2.5 2.5 4.5-5.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </span>
+      <span class="restore-text">{{ store.restoreLabel }}</span>
+    </button>
 
-    <transition name="up-slide">
-      <div v-if="visible" class="upload-dock">
-        <!-- 展开的任务列表 -->
-        <div v-if="store.panelOpen" class="upload-panel">
-          <div class="upload-panel-head">
-            <span>{{ store.hasActive ? '上传任务' : '上传完成' }}</span>
-            <button v-if="!store.hasActive" class="upload-link" @click="store.clear()">清空记录</button>
-          </div>
-          <div class="upload-task-list">
-            <div v-for="task in store.tasks" :key="task.id" class="upload-task">
-              <div class="upload-task-row">
-                <span class="upload-task-title" :title="task.title">{{ task.title }}</span>
-                <span class="upload-task-state" :class="task.status">
-                  <template v-if="task.status === 'running'">{{ task.current }}/{{ task.total }}</template>
-                  <template v-else-if="task.status === 'error'">失败</template>
-                  <template v-else>成功 {{ task.success }}<template v-if="task.failed"> · 失败 {{ task.failed }}</template></template>
-                </span>
-              </div>
-              <el-progress
-                :percentage="task.status === 'done' ? 100 : task.progress"
-                :status="task.status === 'error' ? 'exception' : (task.status === 'done' ? 'success' : undefined)"
-                :stroke-width="6"
-                :show-text="false"
-              />
-              <div v-if="task.fileName && task.status === 'running'" class="upload-task-file" :title="task.fileName">
-                {{ task.fileName }}
-              </div>
-              <ul v-if="task.status !== 'running' && task.details.length" class="upload-task-details">
-                <li v-for="(d, i) in task.details" :key="i" :class="d.success ? 'ok' : 'fail'">
-                  <span class="d-name" :title="d.name">{{ d.name }}</span>
-                  <span class="d-status">{{ d.success ? '成功' : (d.error || d.message || '失败') }}</span>
-                </li>
-              </ul>
-            </div>
-          </div>
+    <!-- 展开的任务面板：从标题栏向下弹出 -->
+    <div v-if="store.dockVisible" class="upload-dock">
+      <div class="upload-bar">
+        <div class="upload-summary" @click="store.togglePanel">
+          <span class="upload-spinner" v-if="store.overallPercent < 100">
+            <svg viewBox="0 0 20 20" fill="none">
+              <circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="2" opacity="0.3" />
+              <path d="M18 10a8 8 0 0 0-8-8" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+            </svg>
+          </span>
+          <span class="upload-title">{{ store.barTitle }}</span>
+          <span class="upload-overall">{{ store.overallPercent }}%</span>
         </div>
-
-        <!-- 底部条 -->
-        <div class="upload-bar">
-          <div class="upload-bar-progress">
-            <div class="upload-bar-fill" :style="{ width: store.overallPercent + '%' }" />
-          </div>
-          <div class="upload-bar-main" @click="store.togglePanel()">
-            <span class="upload-bar-icon" :class="{ spinning: store.hasActive }">&#xeb56;</span>
-            <span class="upload-bar-text">{{ store.summaryText }}</span>
-            <span class="upload-bar-percent">{{ store.overallPercent }}%</span>
-            <span class="upload-bar-spacer" />
-            <button class="upload-bar-btn" :title="store.panelOpen ? '收起' : '查看详情'" @click.stop="store.togglePanel()">
-              <span>{{ store.panelOpen ? '▾' : '▴' }}</span>
-            </button>
-            <button class="upload-bar-btn" title="隐藏到后台" @click.stop="store.hideBar()">
-              <span>×</span>
-            </button>
-          </div>
+        <div class="upload-actions">
+          <button class="upload-btn" @click="store.togglePanel">
+            <svg viewBox="0 0 20 20" fill="none" :class="{ collapsed: !store.panelOpen }">
+              <path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+          <button class="upload-btn" @click="store.minimizeToRestore">
+            <svg viewBox="0 0 20 20" fill="none">
+              <path d="M4 10h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+            </svg>
+          </button>
         </div>
       </div>
-    </transition>
+      <!-- 汇总进度条 -->
+      <div class="bar-track">
+        <div
+          class="bar-fill"
+          :class="{ done: store.overallPercent >= 100 }"
+          :style="{ width: store.overallPercent + '%' }"
+        ></div>
+      </div>
+      <div v-if="store.panelOpen" class="upload-panel">
+        <div
+          v-for="task in store.tasks"
+          :key="task.id"
+          class="upload-task"
+          :class="{ done: task.status === 'done', error: task.status === 'error' }"
+        >
+          <div class="task-info">
+            <span class="task-name" :title="task.fileName">{{ task.fileName }}</span>
+            <span class="task-meta">{{ task.detail }}</span>
+          </div>
+          <div class="task-right">
+            <span v-if="task.status === 'done'" class="task-check">
+              <svg viewBox="0 0 20 20" fill="none">
+                <path d="M4 10.5l4 4 8-9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </span>
+            <span v-else-if="task.status === 'error'" class="task-error-text">{{ t('common.failed') }}</span>
+            <span v-else class="task-percent">{{ task.progress }}%</span>
+          </div>
+          <div class="task-track" v-if="task.status === 'running'">
+            <div class="task-fill" :style="{ width: task.progress + '%' }"></div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
+<script setup>
+import { useI18n } from 'vue-i18n'
+import { useUploadStore } from '../stores/upload'
+
+const { t } = useI18n()
+const store = useUploadStore()
+</script>
+
 <style scoped>
+/* 标题栏内联容器 */
+.up-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-right: 6px;
+  z-index: 2200;
+}
+
+/* 标题栏小胶囊 */
+.upload-restore {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border-soft);
+  background: var(--panel);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  font-family: inherit;
+  user-select: none;
+  transition: background 0.2s, box-shadow 0.2s;
+}
+.upload-restore:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+.restore-spinner {
+  width: 13px;
+  height: 13px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--brand);
+}
+.restore-spinner svg {
+  width: 13px;
+  height: 13px;
+  animation: up-spin 1s linear infinite;
+}
+.restore-spinner.done {
+  color: var(--el-color-success, #67c23a);
+}
+.restore-spinner.done svg {
+  animation: none;
+}
+.restore-text {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 下拉面板的壳：绝对定位挂到标题栏下沿 */
 .upload-dock {
-  position: fixed;
-  left: 196px;
+  position: absolute;
+  top: calc(100% + 8px);
   right: 0;
-  bottom: 0;
-  z-index: 2100;
-  background: var(--bg-soft);
-  border-top: 1px solid var(--border-soft);
-  box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.12);
+  width: 340px;
+  max-width: 70vw;
+  background: var(--panel);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
 }
 .upload-bar {
-  position: relative;
-  height: 40px;
-}
-.upload-bar-progress {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  height: 3px;
-  background: var(--bg-mute);
-}
-.upload-bar-fill {
-  height: 100%;
-  background: var(--primary);
-  transition: width 0.25s ease;
-}
-.upload-bar-main {
-  height: 100%;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 16px;
-  font-size: 13px;
-  color: var(--text-2);
-  cursor: pointer;
-  user-select: none;
+  justify-content: space-between;
+  padding: 8px 12px;
 }
-.upload-bar-icon {
-  font-family: 'iconfont';
-  color: var(--primary);
-  font-size: 15px;
-}
-.upload-bar-icon.spinning {
-  animation: up-pulse 1.2s infinite;
-}
-@keyframes up-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.45; }
-}
-.upload-bar-text {
-  font-weight: 600;
-  color: var(--text-1);
-}
-.upload-bar-percent {
-  color: var(--primary);
-  font-weight: 600;
-}
-.upload-bar-spacer {
+.upload-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex: 1;
+  min-width: 0;
+  cursor: pointer;
 }
-.upload-bar-btn {
-  width: 26px;
-  height: 26px;
+.upload-spinner {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--brand);
+}
+.upload-spinner svg {
+  width: 16px;
+  height: 16px;
+  animation: up-spin 1s linear infinite;
+}
+@keyframes up-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.upload-title {
+  font-size: 12px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.upload-overall {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.upload-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.upload-btn {
+  width: 24px;
+  height: 24px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--border-soft);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-2);
-  cursor: pointer;
-  transition: all 0.15s;
-  opacity: 0;
-  pointer-events: none;
-}
-.upload-bar-main:hover .upload-bar-btn,
-.upload-bar-main:focus-within .upload-bar-btn {
-  opacity: 1;
-  pointer-events: auto;
-}
-.upload-bar-btn:hover {
-  color: var(--primary);
-  border-color: var(--primary);
-}
-.upload-panel {
-  max-height: 260px;
-  overflow-y: auto;
-  padding: 10px 16px 12px;
-  border-bottom: 1px solid var(--border-soft);
-}
-.upload-panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-1);
-  margin-bottom: 8px;
-}
-.upload-link {
   border: none;
   background: transparent;
-  color: var(--primary);
-  font-size: 12px;
+  color: var(--text-secondary);
   cursor: pointer;
+  border-radius: 5px;
+}
+.upload-btn:hover {
+  background: var(--bg-soft);
+  color: var(--text-primary);
+}
+.upload-btn svg {
+  width: 14px;
+  height: 14px;
+  transition: transform 0.2s;
+}
+.upload-btn svg.collapsed {
+  transform: rotate(-90deg);
+}
+
+/* 汇总进度条 */
+.bar-track {
+  height: 2px;
+  background: var(--border-soft);
+  overflow: hidden;
+}
+.bar-fill {
+  height: 100%;
+  background: var(--brand);
+  transition: width 0.3s;
+}
+.bar-fill.done {
+  background: var(--el-color-success, #67c23a);
+}
+
+/* 任务面板在进度条下方（向下展开） */
+.upload-panel {
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 8px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid var(--border-soft);
 }
 .upload-task {
-  padding: 8px 0;
-  border-top: 1px dashed var(--border-soft);
-}
-.upload-task:first-child {
-  border-top: none;
-}
-.upload-task-row {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 4px;
-}
-.upload-task-title {
-  font-size: 12px;
-  color: var(--text-1);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.upload-task-state {
-  flex-shrink: 0;
-  font-size: 12px;
-  color: var(--text-3);
-}
-.upload-task-state.done { color: var(--el-color-success); }
-.upload-task-state.error { color: var(--el-color-danger); }
-.upload-task-file {
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--text-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.upload-task-details {
-  list-style: none;
-  margin: 6px 0 0;
-  padding: 0;
-  max-height: 110px;
-  overflow-y: auto;
-}
-.upload-task-details li {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 11px;
-  padding: 2px 0;
-}
-.upload-task-details li.ok .d-status { color: var(--el-color-success); }
-.upload-task-details li.fail .d-status { color: var(--el-color-danger); }
-.d-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-2);
-}
-.upload-restore {
-  position: fixed;
-  right: 18px;
-  bottom: 18px;
-  z-index: 2100;
-  height: 34px;
-  padding: 0 12px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  border-radius: 17px;
+  padding: 6px 8px 10px;
+  border-radius: 6px;
   background: var(--bg-soft);
-  border: 1px solid var(--primary);
-  color: var(--primary);
+}
+.upload-task.error {
+  background: rgba(245, 108, 108, 0.12);
+}
+.task-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.task-name {
   font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.upload-restore-icon {
-  font-family: 'iconfont';
-  font-size: 14px;
+.task-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
 }
-.up-slide-enter-active,
-.up-slide-leave-active,
-.up-fade-enter-active,
-.up-fade-leave-active {
-  transition: all 0.2s ease;
+.task-right {
+  margin-left: 10px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
 }
-.up-slide-enter-from,
-.up-slide-leave-to {
-  transform: translateY(100%);
-  opacity: 0;
+.task-percent {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
 }
-.up-fade-enter-from,
-.up-fade-leave-to {
-  opacity: 0;
+.task-check {
+  width: 15px;
+  height: 15px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--el-color-success, #67c23a);
+}
+.task-check svg {
+  width: 15px;
+  height: 15px;
+}
+.task-error-text {
+  font-size: 11px;
+  color: var(--el-color-error, #f56c6c);
+}
+.task-track {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 4px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--border-soft);
+  overflow: hidden;
+}
+.task-fill {
+  height: 100%;
+  background: var(--brand);
+  transition: width 0.3s;
 }
 </style>

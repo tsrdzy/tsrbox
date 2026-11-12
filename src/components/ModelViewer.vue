@@ -29,16 +29,49 @@ const currentAnimIndex = ref(-1) // 当前播放的动画索引，-1 表示无
 const animDropdownOpen = ref(false) // 动画下拉菜单展开状态
 
 let scene, camera, renderer, controls, gridHelper, floorGroup
+let dirLight = null // 主方向光（含阴影相机），fitView 时按模型尺寸缩放其范围
 let currentModel = null
 let bbAnimator = null // bbmodel 动画播放器
 let bbAnims = [] // bbmodel 原始动画数据
 let jsonAnimator = null // Bedrock JSON 动画播放器
 let jsonAnims = [] // Bedrock JSON 动画数据
+
+/**
+ * 在动画列表中查找 idle 动画索引（无则 -1）
+ * 匹配动画名最后一段（去掉 animation. 前缀）：精确 idle > 词边界包含 > 子串包含
+ */
+function findIdleIndex(anims) {
+  if (!anims?.length) return -1
+  const score = (a) => {
+    const seg = String(a?.name || '').split('.').pop().toLowerCase().trim()
+    if (!seg) return -1
+    if (seg === 'idle') return 0
+    if (/^idle[_\s-]/.test(seg) || /[_\s-]idle$/.test(seg) || /[_\s-]idle[_\s-]/.test(seg)) return 1
+    if (seg.includes('idle')) return 2
+    return -1
+  }
+  let best = -1
+  let bestScore = 99
+  anims.forEach((a, i) => {
+    const s = score(a)
+    if (s >= 0 && s < bestScore) {
+      bestScore = s
+      best = i
+    }
+  })
+  return best
+}
 let clock = null
 let rafId = null
 let resizeObserver = null
 let sceneReady = false
 let themeObserver = null // 监听 html.dark 变化以切换场景背景
+let needsRender = true // 按需渲染标记（Blockbench 同款策略）
+
+/** 标记需要重绘一帧 */
+function invalidate() {
+  needsRender = true
+}
 
 /** 读取当前主题对应的 viewer 背景十六进制数 */
 function getThemeBgHex() {
@@ -132,7 +165,11 @@ async function loadBBModel(ab) {
     }
     console.log('[ModelViewer] bbmodel 解析成功, 元素:', info.elementCount, '贴图:', info.textureCount, '动画:', bbAnims.length)
     onModelLoaded(group)
-    if (bbAnims.length) playAnimation(0)
+    // 初始动画优先 idle（待机动画），没有则回落第一个
+    if (bbAnims.length) {
+      const idle = findIdleIndex(bbAnims)
+      playAnimation(idle >= 0 ? idle : 0)
+    }
   } catch (e) {
     loading.value = false
     errorMsg.value = 'bbmodel 解析失败: ' + (e.message || e)
@@ -201,7 +238,11 @@ async function loadJSONModel(ab) {
       jsonAnims.length,
     )
     onModelLoaded(built.group)
-    if (jsonAnims.length) playJsonAnimation(0)
+    // 初始动画优先 idle，没有则回落第一个
+    if (jsonAnims.length) {
+      const idle = findIdleIndex(jsonAnims)
+      playJsonAnimation(idle >= 0 ? idle : 0)
+    }
   } catch (e) {
     loading.value = false
     errorMsg.value = 'JSON 模型解析失败: ' + (e.message || e)
@@ -239,10 +280,12 @@ function playJsonAnimation(index) {
   if (index < 0 || index >= jsonAnims.length) {
     jsonAnimator.reset()
     currentAnimIndex.value = -1
+    invalidate()
     return
   }
   jsonAnimator.setAnimation(jsonAnims[index])
   currentAnimIndex.value = index
+  invalidate()
 }
 
 /** 播放指定索引的动画 */
@@ -257,11 +300,13 @@ function playAnimation(index) {
   if (index < 0 || index >= bbAnims.length) {
     bbAnimator.reset()
     currentAnimIndex.value = -1
+    invalidate()
     return
   }
   bbAnimator.setAnimation(bbAnims[index])
   bbAnimator.playing = true
   currentAnimIndex.value = index
+  invalidate()
 }
 
 /** 切换动画选择 */
@@ -292,6 +337,115 @@ function closeAnimDropdown() {
   animDropdownOpen.value = false
 }
 
+// ===== 网格合并（参考 Blockbench 的批量渲染思路）=====
+// 每个 cube 由 6 个材质组组成 → 每帧 6 次 draw call，几千方块的模型会有上万次调用。
+// 1) 六面同材质时合并成一组（无任何视觉变化）；
+// 2) 方块特别多的模型，把同一骨骼下、同材质的网格烘焙变换后合并成一个 Mesh
+//    （骨骼节点保留，动画不受影响）。
+const MERGE_THRESHOLD = 300
+const _mergeV = new THREE.Vector3()
+const _mergeN = new THREE.Vector3()
+const _mergeUV = new THREE.Vector2()
+const _mergeNM = new THREE.Matrix3()
+
+/** 六个材质完全相同时去掉多余的分组，减少 draw call */
+function collapseMeshGroups(mesh) {
+  const mats = mesh.material
+  if (!Array.isArray(mats) || mats.length === 0) return
+  const first = mats[0]
+  if (!first || first.visible === false) return
+  for (const m of mats) if (m !== first) return
+  mesh.material = first
+  mesh.geometry.clearGroups()
+}
+
+function mergeModelMeshes(root) {
+  const parents = []
+  root.traverse((o) => {
+    if (o !== root && o.children.length > 1) parents.push(o)
+  })
+  for (const parent of parents) {
+    // 只合并带完整 position/normal/uv 的普通静态网格（跳过体素色块、蒙皮网格）
+    const meshes = parent.children.filter(
+      (c) =>
+        c.isMesh &&
+        c.visible &&
+        !c.isSkinnedMesh &&
+        c.geometry?.attributes?.position &&
+        c.geometry?.attributes?.normal &&
+        c.geometry?.attributes?.uv
+    )
+    if (meshes.length < 2) continue
+    const buckets = new Map()
+    for (const mesh of meshes) {
+      mesh.updateMatrix()
+      const matrix = mesh.matrix
+      _mergeNM.getNormalMatrix(matrix)
+      const geo = mesh.geometry
+      const pos = geo.attributes.position
+      const nor = geo.attributes.normal
+      const uv = geo.attributes.uv
+      const index = geo.index
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+      const groups = geo.groups.length
+        ? geo.groups
+        : [{ start: 0, count: index ? index.count : pos.count, materialIndex: 0 }]
+      for (const g of groups) {
+        const material = mats[g.materialIndex ?? 0]
+        // 隐藏面材质（visible=false）不参与合并
+        if (!material || material.visible === false) continue
+        let bucket = buckets.get(material.uuid)
+        if (!bucket) {
+          bucket = { material, position: [], normal: [], uv: [] }
+          buckets.set(material.uuid, bucket)
+        }
+        const end = g.start + g.count
+        for (let i = g.start; i < end; i++) {
+          const vi = index ? index.getX(i) : i
+          _mergeV.fromBufferAttribute(pos, vi).applyMatrix4(matrix)
+          bucket.position.push(_mergeV.x, _mergeV.y, _mergeV.z)
+          _mergeN.fromBufferAttribute(nor, vi).applyMatrix3(_mergeNM).normalize()
+          bucket.normal.push(_mergeN.x, _mergeN.y, _mergeN.z)
+          _mergeUV.fromBufferAttribute(uv, vi)
+          bucket.uv.push(_mergeUV.x, _mergeUV.y)
+        }
+      }
+    }
+    if (!buckets.size) continue
+    for (const mesh of meshes) {
+      parent.remove(mesh)
+      mesh.geometry.dispose()
+    }
+    for (const bucket of buckets.values()) {
+      const geo = new THREE.BufferGeometry()
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(bucket.position, 3))
+      geo.setAttribute('normal', new THREE.Float32BufferAttribute(bucket.normal, 3))
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(bucket.uv, 2))
+      const mesh = new THREE.Mesh(geo, bucket.material)
+      mesh.name = `${parent.name || 'group'}_merged`
+      parent.add(mesh)
+    }
+  }
+}
+
+/**
+ * 网格优化入口：先做无损的分组压缩；方块数量超过阈值时再做合并。
+ * 小模型保持逐块网格，避免半透明面排序等细节出现回归。
+ */
+function optimizeMeshes(object) {
+  const meshes = []
+  object.traverse((child) => {
+    if (child.isMesh) {
+      collapseMeshGroups(child)
+      meshes.push(child)
+    }
+  })
+  if (meshes.length > MERGE_THRESHOLD) {
+    mergeModelMeshes(object)
+  }
+  return meshes.length
+}
+
 function onModelLoaded(object) {
   if (currentModel) {
     scene.remove(currentModel)
@@ -299,6 +453,9 @@ function onModelLoaded(object) {
   }
 
   currentModel = object
+
+  // 大模型先压缩 draw call，再做后续遍历
+  optimizeMeshes(object)
 
   // 检查模型是否包含可渲染的网格
   let hasMesh = false
@@ -368,7 +525,11 @@ function onModelLoaded(object) {
   }
 
   // 立即渲染一帧，确保截图能拿到正确画面
-  if (renderer) renderer.render(scene, camera)
+  if (renderer) {
+    if (renderer.shadowMap) renderer.shadowMap.needsUpdate = true
+    renderer.render(scene, camera)
+    needsRender = false
+  }
 
   emit('loaded', {
     dimensions: {
@@ -421,6 +582,25 @@ function fitView(size) {
   controls.target.set(0, size.y / 2, 0)
   controls.update()
 
+  // 雾效按模型尺寸缩放：起始于相机与模型远端之后，避免大模型（如 Singer ~1700 格）
+  // 被固定 fog(30,200) 完全雾化而不可见
+  if (scene.fog) {
+    scene.fog.near = Math.max(30, dist + maxDim)
+    scene.fog.far = Math.max(200, (dist + maxDim) * 2.5)
+  }
+  // 主方向光阴影相机范围随模型尺寸缩放，否则超大模型阴影失效
+  if (dirLight) {
+    const sc = dirLight.shadow.camera
+    const r = Math.max(maxDim * 0.8, 20)
+    sc.left = -r; sc.right = r; sc.top = r; sc.bottom = -r
+    sc.near = 0.5
+    sc.far = Math.max(80, dist + maxDim * 3)
+    sc.updateProjectionMatrix()
+    dirLight.position.set(dist * 0.6, dist * 0.8, dist * 0.5)
+    dirLight.target.position.set(0, size.y / 2, 0)
+    dirLight.target.updateMatrixWorld()
+  }
+
   if (gridHelper) gridHelper.position.y = 0
 
   console.log('[ModelViewer] 视角已适配, 相机位置:', camera.position, '目标:', controls.target, '距离:', dist)
@@ -429,6 +609,7 @@ function fitView(size) {
 function toggleFloor() {
   showFloor.value = !showFloor.value
   if (floorGroup) floorGroup.visible = showFloor.value
+  invalidate()
 }
 
 function toggleAutoRotate() {
@@ -437,6 +618,7 @@ function toggleAutoRotate() {
     controls.autoRotate = autoRotate.value
     controls.autoRotateSpeed = 2.0 // 旋转速度
   }
+  invalidate()
 }
 
 function restoreView(params) {
@@ -475,16 +657,102 @@ function getViewParams() {
   )
 }
 
+const COVER_WIDTH = 480
+const COVER_HEIGHT = 360
+const COVER_PADDING = 0.06
+const COVER_ALPHA_THRESHOLD = 8
+// 截图时的高分辨率长边：裁剪后模型会被放大，源图太小时会糊
+const COVER_CAPTURE_LONG_SIDE = 1280
+
+/**
+ * 裁掉透明背景，并把模型按 4:3 居中铺满封面画布。
+ * 否则截图里模型只占中间一小块，卡片上看起来会很小。
+ */
+function cropCoverCanvas(source) {
+  const w = source.width
+  const h = source.height
+  if (!w || !h) return ''
+
+  const full = document.createElement('canvas')
+  full.width = w
+  full.height = h
+  const fctx = full.getContext('2d', { willReadFrequently: true })
+  fctx.drawImage(source, 0, 0)
+  const pixels = fctx.getImageData(0, 0, w, h).data
+
+  let minX = w
+  let minY = h
+  let maxX = -1
+  let maxY = -1
+  for (let y = 0; y < h; y++) {
+    const row = y * w * 4
+    for (let x = 0; x < w; x++) {
+      if (pixels[row + x * 4 + 3] > COVER_ALPHA_THRESHOLD) {
+        if (x < minX) minX = x
+        if (x > maxX) maxX = x
+        if (y < minY) minY = y
+        if (y > maxY) maxY = y
+      }
+    }
+  }
+  // 整张全透明：保持原图，避免返回空封面
+  if (maxX < minX || maxY < minY) return source.toDataURL('image/png')
+
+  const out = document.createElement('canvas')
+  out.width = COVER_WIDTH
+  out.height = COVER_HEIGHT
+  const octx = out.getContext('2d')
+  octx.imageSmoothingEnabled = true
+  octx.imageSmoothingQuality = 'high'
+
+  const bw = maxX - minX + 1
+  const bh = maxY - minY + 1
+  const maxW = COVER_WIDTH * (1 - COVER_PADDING * 2)
+  const maxH = COVER_HEIGHT * (1 - COVER_PADDING * 2)
+  const scale = Math.min(maxW / bw, maxH / bh)
+  const dw = bw * scale
+  const dh = bh * scale
+  octx.drawImage(full, minX, minY, bw, bh, (COVER_WIDTH - dw) / 2, (COVER_HEIGHT - dh) / 2, dw, dh)
+  return out.toDataURL('image/png')
+}
+
 function captureThumbnail() {
   if (!renderer) return ''
+  const size = new THREE.Vector2()
+  renderer.getSize(size)
+  // 保持相机取景不变，仅临时提高渲染分辨率，避免裁剪放大后发虚
+  const longSide = Math.max(size.x, size.y) || 1
+  const ratio = COVER_CAPTURE_LONG_SIDE / longSide
+  const captureW = Math.max(1, Math.round(size.x * ratio))
+  const captureH = Math.max(1, Math.round(size.y * ratio))
+
   // 截图时临时切换为透明背景，便于预览图跟随主题色
   const originalBg = scene.background
   scene.background = null
+  renderer.setSize(captureW, captureH, false)
   renderer.render(scene, camera)
-  const dataUrl = renderer.domElement.toDataURL('image/png')
+  const dataUrl = cropCoverCanvas(renderer.domElement)
+  renderer.setSize(size.x, size.y)
   scene.background = originalBg
   renderer.render(scene, camera)
   return dataUrl
+}
+
+/**
+ * 封面截图：先把模型摆到 idle 动画的初始姿态（无 idle 用首个动画，无动画保持静止），
+ * 使预览图呈现待机造型而不是关键帧外的原始姿态
+ */
+function captureCover() {
+  if (bbAnimator && bbAnims.length) {
+    const idle = findIdleIndex(bbAnims)
+    bbAnimator.setAnimation(bbAnims[idle >= 0 ? idle : 0])
+    bbAnimator.apply(0)
+  } else if (jsonAnimator && jsonAnims.length) {
+    const idle = findIdleIndex(jsonAnims)
+    jsonAnimator.setAnimation(jsonAnims[idle >= 0 ? idle : 0])
+    jsonAnimator.apply(0)
+  }
+  return captureThumbnail()
 }
 
 function resetView() {
@@ -535,11 +803,16 @@ function setupScene() {
   renderer.setSize(w, h)
   renderer.shadowMap.enabled = true
   renderer.shadowMap.type = THREE.PCFShadowMap
+  // 方向光阴影不随观察相机变化：只在模型/姿态变化时重算，旋转视角时省掉一整趟深度渲染
+  renderer.shadowMap.autoUpdate = false
+  renderer.shadowMap.needsUpdate = true
   el.appendChild(renderer.domElement)
 
   controls = new OrbitControls(camera, renderer.domElement)
-  controls.enableDamping = true
-  controls.dampingFactor = 0.08
+  // 与 Blockbench 一致：相机跟随鼠标即时到位，不做惯性缓动
+  controls.enableDamping = false
+  // 按需渲染：只有相机/场景有变化时才真正绘制，静止时不再空转 60fps
+  controls.addEventListener('change', invalidate)
 
   const ambient = new THREE.AmbientLight(0xffffff, 0.55)
   scene.add(ambient)
@@ -555,6 +828,7 @@ function setupScene() {
   dir.shadow.camera.top = 20
   dir.shadow.camera.bottom = -20
   scene.add(dir)
+  dirLight = dir
 
   const dir2 = new THREE.DirectionalLight(0xffffff, 0.3)
   dir2.position.set(-8, 6, -6)
@@ -593,11 +867,23 @@ function setupScene() {
 
 function animate() {
   rafId = requestAnimationFrame(animate)
+  if (!renderer || !scene || !camera) return
   if (controls) controls.update()
   const delta = clock ? clock.getDelta() : 0
+  // 先判断是否在播放动画：一次性动画的最后一帧也要画出来
+  const animating = !!(
+    (bbAnimator && bbAnimator.playing) ||
+    (jsonAnimator && jsonAnimator.animation)
+  )
   if (bbAnimator) bbAnimator.update(delta)
   if (jsonAnimator) jsonAnimator.update(delta)
-  if (renderer && scene && camera) renderer.render(scene, camera)
+  // 姿态变了阴影也要跟着重算
+  if (animating && renderer.shadowMap) renderer.shadowMap.needsUpdate = true
+  // 静止时跳过绘制，避免大量方块模型在空闲时持续占用 GPU
+  if (needsRender || animating) {
+    renderer.render(scene, camera)
+    needsRender = false
+  }
 }
 
 function onResize() {
@@ -609,6 +895,7 @@ function onResize() {
   camera.aspect = w / h
   camera.updateProjectionMatrix()
   renderer.setSize(w, h)
+  invalidate()
 }
 
 watch(
@@ -653,7 +940,7 @@ onBeforeUnmount(() => {
   sceneReady = false
 })
 
-defineExpose({ captureThumbnail, getViewParams, resetView })
+defineExpose({ captureThumbnail, captureCover, getViewParams, resetView })
 </script>
 
 <template>

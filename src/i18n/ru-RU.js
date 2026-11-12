@@ -89,6 +89,7 @@ export default {
     title: 'Папки',
     create: 'Новая папка',
     allFiles: 'Все файлы',
+    unfiled: 'Без папки',
     empty: 'Папок пока нет, нажмите +, чтобы создать',
     emptyFolder: 'В этой папке пока нет моделей',
     rename: 'Переименовать папку',
@@ -189,14 +190,16 @@ export default {
       bbmodel: "Проект BBMODEL",
       bedrock: "JSON Bedrock",
       java: "JSON Java",
-      generic: "Универсальный JSON"
+      generic: "Универсальный JSON",
+      gltf: "glTF 2.0"
     },
     desc: {
       original: "Сохраняет исходные файлы без конвертации",
       bbmodel: "Проект Blockbench со встроенными текстурами и анимациями",
       bedrock: "Геометрия .geo.json + анимация .animation.json + текстура; анимации конвертируются",
       java: "Блочная модель Java (координаты 0-16, поворот по одной оси); без анимаций",
-      generic: "Универсальная структура JSON, импортируется в Blockbench, сохраняет анимации"
+      generic: "Универсальная структура JSON, импортируется в Blockbench, сохраняет анимации",
+      gltf: "Сцена glTF 2.0 (.gltf + .bin + текстуры), импортируется в Blender / three.js; анимации не экспортируются"
     }
   },
   recycle: {
@@ -212,7 +215,8 @@ export default {
     deleted: "Удалено навсегда",
     emptyBin: "Очистить корзину",
     emptyConfirm: "Очистить корзину? Все модели будут удалены навсегда.",
-    emptied: "Корзина очищена ({count} моделей)"
+    emptied: "Корзина очищена ({count} моделей)",
+    emptying: "Очистка корзины ({count} моделей)…"
   },
   init: {
     defaultLibraryName: "Библиотека моделей",
@@ -237,6 +241,13 @@ export default {
     switchLibrary: 'Переключить библиотеку'
   },
   home: {
+    regenCovers: 'Пересоздать обложки',
+    regenCoversConfirm: 'Перерендерить обложки для {count} моделей (с позой idle) в фоне. Работать можно параллельно. Начать?',
+    regenCoversDone: 'Обложки пересозданы: успешно {success}, ошибок {failed}',
+    regenCoversProgress: 'Обновление обложек: {current}/{total}',
+    regenCoversCancel: 'Отменить обновление обложек',
+    regenCoversCancelConfirm: 'Отменить обновление обложек? Уже созданные обложки сохранятся.',
+    regenCoversCancelled: 'Обновление обложек отменено: обновлено {success}',
     sameFilesTitle: 'Найдены одинаковые модели',
     sameFilesBatch: 'Найдено записей с полностью совпадающими моделью и текстурами: {count}. Продолжить и перезаписать?',
     overwriteAll: 'Перезаписать все',
@@ -258,6 +269,7 @@ export default {
     noModel: 'Моделей пока нет. Нажмите "Загрузить модель", чтобы добавить первую.',
     noMatch: 'Нет совпадающих моделей',
     coverPlaceholder: 'Нет превью',
+    dragOutHint: 'Перетащите за пределы окна для экспорта',
     animationCount: '{count} анимаций',
     moreTags: '+{count}',
     confirmBatchDelete: "Переместить выбранные модели ({count}) в корзину? Их можно будет восстановить.",
@@ -266,6 +278,7 @@ export default {
     tagsAdded: '{count} тегов добавлено',
     deletionSuccess: 'Удаление успешно',
     deletionFailed: 'Удаление не удалось',
+    deleting: 'Перемещение {count} моделей в корзину…',
     renameModel: 'Переименовать модель',
     enterName: 'Введите название модели',
     renamed: 'Переименовано',

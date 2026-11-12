@@ -56,13 +56,35 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # Release 说明取自 CHANGELOG.md 对应版本条目，避免每次发版手写
+      - name: Extract release notes
+        id: notes
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          $lines = Get-Content CHANGELOG.md
+          $start = -1
+          $end = $lines.Count
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($start -lt 0 -and $lines[$i] -match "^## \[$([regex]::Escape($version))\]") { $start = $i; continue }
+            if ($start -ge 0 -and $lines[$i] -match '^## \[') { $end = $i; break }
+          }
+          if ($start -ge 0 -and $end -gt $start) {
+            $body = ($lines[($start + 1)..($end - 1)] -join "`n").Trim()
+          } else {
+            $body = 'See the assets below to download and install this version.'
+          }
+          "body<<EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          $body | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'tsrbox v__VERSION__'
-          releaseBody: 'See the assets below to download and install this version.'
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: true
           prerelease: false
 

@@ -189,6 +189,9 @@ function formatDate(iso) {
               </div>
 
               <el-empty v-if="sortedLibraries.length === 0" :description="t('init.empty')">
+                <template #image>
+                  <i class="iconfont icon-folder empty-state-icon"></i>
+                </template>
                 <div class="hint">{{ t('init.createDesc') }}</div>
               </el-empty>
 

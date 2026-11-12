@@ -1,6 +1,6 @@
 [package]
 name = "tsrbox"
-version = "1.0.2"
+version = "1.0.3"
 description = "A Blockbench (.bbmodel) model resource manager"
 authors = ["tsrdzy"]
 edition = "2021"

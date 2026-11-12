@@ -89,6 +89,7 @@ export default {
     title: 'Folders',
     create: 'New Folder',
     allFiles: 'All Files',
+    unfiled: 'Uncategorized',
     empty: 'No folders yet, click + to create one',
     emptyFolder: 'No models in this folder yet',
     rename: 'Rename Folder',
@@ -189,14 +190,16 @@ export default {
       bbmodel: "BBMODEL project",
       bedrock: "Bedrock JSON",
       java: "Java JSON",
-      generic: "Generic JSON"
+      generic: "Generic JSON",
+      gltf: "glTF 2.0"
     },
     desc: {
       original: "Keep the original model files without conversion",
       bbmodel: "Blockbench project with embedded textures and animations",
       bedrock: "Geometry .geo.json + animation .animation.json + texture; animations are converted",
       java: "Java block model (0-16 coordinates, single-axis rotation); animations unsupported",
-      generic: "Generic JSON structure, importable in Blockbench, keeps animations"
+      generic: "Generic JSON structure, importable in Blockbench, keeps animations",
+      gltf: "glTF 2.0 scene (.gltf + .bin + textures), importable in Blender / three.js; animations are not exported"
     }
   },
   recycle: {
@@ -212,7 +215,8 @@ export default {
     deleted: "Permanently deleted",
     emptyBin: "Empty recycle bin",
     emptyConfirm: "Empty the recycle bin? All models will be permanently deleted.",
-    emptied: "Recycle bin emptied ({count} models)"
+    emptied: "Recycle bin emptied ({count} models)",
+    emptying: "Emptying recycle bin ({count} models)…"
   },
   init: {
     defaultLibraryName: "Model Library",
@@ -237,6 +241,13 @@ export default {
     switchLibrary: 'Switch Library'
   },
   home: {
+    regenCovers: 'Regenerate covers',
+    regenCoversConfirm: 'Re-render covers for {count} models (idle pose included) in the background. You can keep working. Start now?',
+    regenCoversDone: 'Covers rebuilt: {success} succeeded, {failed} failed',
+    regenCoversProgress: 'Refreshing covers: {current}/{total}',
+    regenCoversCancel: 'Cancel cover refresh',
+    regenCoversCancelConfirm: 'Cancel the cover refresh? Covers already generated will be kept.',
+    regenCoversCancelled: 'Cover refresh cancelled: {success} covers updated',
     sameFilesTitle: 'Same models found',
     sameFilesBatch: 'Found {count} records with identical model files and textures. Continue and overwrite?',
     overwriteAll: 'Overwrite All',
@@ -258,6 +269,7 @@ export default {
     noModel: 'No models yet. Click "Upload Model" to add your first one',
     noMatch: 'No matching models',
     coverPlaceholder: 'No Preview',
+    dragOutHint: 'Drag out of the window to export',
     animationCount: '{count} animations',
     moreTags: '+{count}',
     confirmBatchDelete: "Move the selected {count} models to the recycle bin? You can restore them later.",
@@ -266,6 +278,7 @@ export default {
     tagsAdded: '{count} tags added',
     deletionSuccess: 'Deletion successful',
     deletionFailed: 'Deletion failed',
+    deleting: 'Moving {count} models to the recycle bin…',
     renameModel: 'Rename Model',
     enterName: 'Please enter model name',
     renamed: 'Renamed',

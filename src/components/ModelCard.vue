@@ -1,5 +1,6 @@
 <script setup>
 import { computed } from 'vue'
+import { useCovers } from '../composables/useCovers'
 
 const props = defineProps({
   model: { type: Object, required: true },
@@ -9,6 +10,11 @@ const props = defineProps({
   display: { type: Object, default: () => ({ name: true, tags: true, dimensions: true, fileSize: true, uploadTime: true, fileType: true }) }
 })
 const emit = defineEmits(['select', 'dblclick', 'contextmenu'])
+
+// 封面由列表按「当前视口」统一调度读取（useCovers.setWanted），
+// 卡片只负责从缓存取图，避免快速拖动滚动条时逐行发起请求
+const covers = useCovers()
+const coverSrc = computed(() => covers.coverOf(props.model.id))
 
 function formatSize(bytes) {
   if (!bytes) return '0 B'
@@ -52,7 +58,7 @@ function handleContextMenu(e) {
 <template>
   <el-card class="card" :class="{ selected, compact: density === 'compact', tiny: density === 'tiny' }" shadow="hover" @click="handleClick" @dblclick="handleDblClick" @contextmenu="handleContextMenu">
     <div class="cover">
-      <img v-if="model.coverBase64" :src="model.coverBase64" alt="cover" draggable="false" @mousedown.prevent />
+      <img v-if="coverSrc" :src="coverSrc" alt="cover" draggable="false" @mousedown.prevent />
       <div v-else class="cover-placeholder">
         <span>无预览图</span>
       </div>
@@ -91,6 +97,10 @@ function handleContextMenu(e) {
   cursor: pointer;
   transition: transform 0.15s, border-color 0.2s;
   position: relative;
+  /* 虚拟滚动要求行高一致：由外层传入固定高度 */
+  box-sizing: border-box;
+  height: var(--card-h, auto);
+  overflow: hidden;
 }
 .card:hover {
   transform: translateY(-2px);
@@ -103,14 +113,21 @@ function handleContextMenu(e) {
 }
 .card :deep(.el-card__body) {
   padding: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 .cover {
   position: relative;
+  flex: 0 0 auto;
+  height: var(--card-cover-h, auto);
   aspect-ratio: 4 / 3;
   background: var(--bg-mute);
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
 }
 .cover img {
   width: 100%;
@@ -150,6 +167,8 @@ function handleContextMenu(e) {
 }
 .info {
   padding: 12px 14px;
+  flex: 1 1 auto;
+  overflow: hidden;
 }
 .title {
   font-size: 14px;

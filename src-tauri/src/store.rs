@@ -1,4 +1,4 @@
-use base64::{engine::general_purpose::STANDARD, Engine};
+﻿use base64::{engine::general_purpose::STANDARD, Engine};
 use rusqlite::{Connection, Row};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -170,6 +170,26 @@ pub fn soft_delete_model(conn: &Connection, id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 批量软删除：单事务提交，避免上千个模型逐条开启事务造成长时间等待
+pub fn soft_delete_models(conn: &Connection, ids: &[String]) -> Result<usize, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let now = now_iso();
+    let mut deleted = 0usize;
+    {
+        let mut stmt = tx
+            .prepare("UPDATE models SET deleted_at = ?1 WHERE id = ?2 AND (deleted_at IS NULL OR deleted_at = '')")
+            .map_err(|e| e.to_string())?;
+        for id in ids {
+            match stmt.execute(rusqlite::params![&now, id]) {
+                Ok(n) => deleted += n,
+                Err(e) => eprintln!("[store] 批量删除失败 id={id}: {e}"),
+            }
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(deleted)
+}
+
 pub fn restore_model(conn: &Connection, id: &str) -> Result<(), String> {
     let changed = conn
         .execute(
@@ -190,7 +210,8 @@ pub fn delete_model_permanently(root: &Path, conn: &Connection, id: &str) -> Res
     Ok(())
 }
 
-pub fn empty_recycle(root: &Path, conn: &Connection) -> Result<usize, String> {
+/// 清空回收站（仅数据库，单事务完成）：返回被清除的模型 id，目录删除由调用方在数据库锁外执行
+pub fn empty_recycle(conn: &Connection) -> Result<Vec<String>, String> {
     let mut stmt = conn
         .prepare("SELECT id FROM models WHERE deleted_at IS NOT NULL AND deleted_at != ''")
         .map_err(|e| e.to_string())?;
@@ -200,12 +221,44 @@ pub fn empty_recycle(root: &Path, conn: &Connection) -> Result<usize, String> {
         .filter_map(|row| row.ok())
         .collect();
     drop(stmt);
-    for id in &ids {
-        conn.execute("DELETE FROM models WHERE id = ?1", [id])
-            .map_err(|e| e.to_string())?;
-        let _ = delete_model_dir(root, id);
+    if ids.is_empty() {
+        return Ok(ids);
     }
-    Ok(ids.len())
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM models WHERE deleted_at IS NOT NULL AND deleted_at != ''",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(ids)
+}
+
+/// 并行删除模型目录：上千个目录串行删除在 Windows 上很慢，这里按 CPU 数开多个线程
+pub fn remove_model_dirs(root: &Path, ids: &[String]) {
+    if ids.is_empty() {
+        return;
+    }
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(2, 8);
+    if ids.len() <= workers {
+        for id in ids {
+            let _ = delete_model_dir(root, id);
+        }
+        return;
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(id) = ids.get(i) else { break };
+                let _ = delete_model_dir(root, id);
+            });
+        }
+    });
 }
 
 /// 清理超过保留期的回收站模型（打开资源库时调用）
@@ -369,7 +422,12 @@ pub fn remove_aux_file(root: &Path, id: &str, name: &str) -> Result<(), String> 
 }
 
 /// 拷贝源文件到模型分片目录，返回上传页所需的数据（尚未写入数据库）
-pub fn create_model_from_path(root: &Path, source: &Path, hash: &str) -> Result<Value, String> {
+pub fn create_model_from_path(
+    root: &Path,
+    source: &Path,
+    hash: &str,
+    include_data: bool,
+) -> Result<Value, String> {
     let file_name = source
         .file_name()
         .and_then(|value| value.to_str())
@@ -386,9 +444,17 @@ pub fn create_model_from_path(root: &Path, source: &Path, hash: &str) -> Result<
     let dest = dir.join(&file_name);
     fs::copy(source, &dest).map_err(|e| format!("复制文件失败: {e}"))?;
     let size = fs::metadata(&dest).map_err(|e| e.to_string())?.len();
-    let bytes = fs::read(&dest).map_err(|e| e.to_string())?;
-    let data_base64 = STANDARD.encode(bytes);
     let ext = file_ext(source);
+
+    // 批量上传时每个模型都内嵌 base64 会让单次 IPC 响应过大，
+    // 导致 WebView 渲染进程内存溢出崩溃（STATUS_BREAKPOINT），
+    // 因此仅在单文件上传等需要立即预览的场景内嵌数据。
+    let data_base64 = if include_data {
+        let bytes = fs::read(&dest).map_err(|e| e.to_string())?;
+        Value::String(STANDARD.encode(bytes))
+    } else {
+        Value::Null
+    };
 
     Ok(json!({
         "duplicate": false,
@@ -402,6 +468,13 @@ pub fn create_model_from_path(root: &Path, source: &Path, hash: &str) -> Result<
         "auxFiles": [],
         "defaultName": default_name
     }))
+}
+
+/// 读取库内模型主文件内容（base64），供批量上传后按需渲染封面
+pub fn read_model_file_data(root: &Path, id: &str, file_name: &str) -> Result<String, String> {
+    let path = model_dir(root, id).join(file_name);
+    let bytes = fs::read(&path).map_err(|e| format!("读取模型文件失败: {e}"))?;
+    Ok(STANDARD.encode(bytes))
 }
 
 pub fn pending_file_for(source: &Path, hash: &str) -> Value {
@@ -432,7 +505,7 @@ pub fn create_model_with_aux(
     id: &str,
     aux: &[(PathBuf, String)],
 ) -> Result<Value, String> {
-    let mut record = create_model_from_path(root, source, id)?;
+    let mut record = create_model_from_path(root, source, id, true)?;
     let mut files: Vec<Value> = record
         .get("files")
         .and_then(|value| value.as_array())
@@ -985,7 +1058,7 @@ mod tests {
         let source = dir.join("cube.bbmodel");
         fs::write(&source, "{\"meta\":{}}").unwrap();
         let hash = content_key(&[source.clone()]).unwrap();
-        let mut meta = create_model_from_path(&dir, &source, &hash).unwrap();
+        let mut meta = create_model_from_path(&dir, &source, &hash, true).unwrap();
         meta["name"] = json!("Cube");
         meta["cover"] = json!("cover.png");
         meta["animationCount"] = json!(2);
@@ -1034,7 +1107,7 @@ mod tests {
         assert!(validate_model(&animation).is_err());
 
         let hash = content_key(&[source.clone()]).unwrap();
-        create_model_from_path(&dir, &source, &hash).unwrap();
+        create_model_from_path(&dir, &source, &hash, true).unwrap();
 
         let texture = dir.join("skin.png");
         fs::write(&texture, [0u8, 1, 2]).unwrap();
@@ -1102,7 +1175,7 @@ mod tests {
         let source = dir.join("cube.bbmodel");
         fs::write(&source, "{\"meta\":{}}").unwrap();
         let key = content_key(&[source.clone()]).unwrap();
-        let mut meta = create_model_from_path(&dir, &source, &key).unwrap();
+        let mut meta = create_model_from_path(&dir, &source, &key, true).unwrap();
         meta["name"] = json!("Cube");
         meta["uploadTime"] = json!(now_iso());
         upsert_model(&conn, &meta).unwrap();
@@ -1211,7 +1284,7 @@ mod tests {
         let source = dir.join("cube.bbmodel");
         fs::write(&source, "{\"meta\":{}}").unwrap();
         let key = content_key(&[source.clone()]).unwrap();
-        let mut meta = create_model_from_path(&dir, &source, &key).unwrap();
+        let mut meta = create_model_from_path(&dir, &source, &key, true).unwrap();
         meta["name"] = json!("Cube");
         meta["uploadTime"] = json!(now_iso());
         upsert_model(&conn, &meta).unwrap();
